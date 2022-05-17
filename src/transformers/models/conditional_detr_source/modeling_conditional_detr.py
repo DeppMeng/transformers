@@ -39,7 +39,7 @@ from ...utils import (
     replace_return_docstrings,
     requires_backends,
 )
-from .configuration_detr import DetrConfig
+from .configuration_conditional_detr import DetrConfig
 
 
 if is_scipy_available():

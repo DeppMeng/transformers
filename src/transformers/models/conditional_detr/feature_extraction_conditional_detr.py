@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Feature extractor class for DETR."""
+"""Feature extractor class for CONDITIONAL_DETR."""
 
 import io
 import pathlib
@@ -37,7 +37,7 @@ logger = logging.get_logger(__name__)
 ImageInput = Union[Image.Image, np.ndarray, "torch.Tensor", List[Image.Image], List[np.ndarray], List["torch.Tensor"]]
 
 
-# 2 functions below inspired by https://github.com/facebookresearch/detr/blob/master/util/box_ops.py
+# 2 functions below inspired by https://github.com/facebookresearch/conditional_detr/blob/master/util/box_ops.py
 def center_to_corners_format(x):
     """
     Converts a PyTorch tensor of bounding boxes of center format (center_x, center_y, width, height) to corners format
@@ -119,9 +119,9 @@ def id_to_rgb(id_map):
     return color
 
 
-class DetrFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
+class ConditionalDETRFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
     r"""
-    Constructs a DETR feature extractor.
+    Constructs a CONDITIONAL_DETR feature extractor.
 
     This feature extractor inherits from [`FeatureExtractionMixin`] which contains most of the main methods. Users
     should refer to this superclass for more information regarding those methods.
@@ -186,7 +186,7 @@ class DetrFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
         else:
             raise ValueError(f"Format {self.format} not supported")
 
-    # inspired by https://github.com/facebookresearch/detr/blob/master/datasets/coco.py#L33
+    # inspired by https://github.com/facebookresearch/conditional_detr/blob/master/datasets/coco.py#L33
     def convert_coco_poly_to_mask(self, segmentations, height, width):
 
         try:
@@ -210,10 +210,10 @@ class DetrFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
 
         return masks
 
-    # inspired by https://github.com/facebookresearch/detr/blob/master/datasets/coco.py#L50
+    # inspired by https://github.com/facebookresearch/conditional_detr/blob/master/datasets/coco.py#L50
     def prepare_coco_detection(self, image, target, return_segmentation_masks=False):
         """
-        Convert the target in COCO format into the format expected by DETR.
+        Convert the target in COCO format into the format expected by CONDITIONAL_DETR.
         """
         w, h = image.size
 
@@ -431,11 +431,11 @@ class DetrFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
             annotations (`Dict`, `List[Dict]`, *optional*):
                 The corresponding annotations in COCO format.
 
-                In case [`DetrFeatureExtractor`] was initialized with `format = "coco_detection"`, the annotations for
+                In case [`ConditionalDETRFeatureExtractor`] was initialized with `format = "coco_detection"`, the annotations for
                 each image should have the following format: {'image_id': int, 'annotations': [annotation]}, with the
                 annotations being a list of COCO object annotations.
 
-                In case [`DetrFeatureExtractor`] was initialized with `format = "coco_panoptic"`, the annotations for
+                In case [`ConditionalDETRFeatureExtractor`] was initialized with `format = "coco_panoptic"`, the annotations for
                 each image should have the following format: {'image_id': int, 'file_name': str, 'segments_info':
                 [segment_info]} with segments_info being a list of COCO panoptic annotations.
 
@@ -445,7 +445,7 @@ class DetrFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
 
             masks_path (`pathlib.Path`, *optional*):
                 Path to the directory containing the PNG files that store the class-agnostic image segmentations. Only
-                relevant in case [`DetrFeatureExtractor`] was initialized with `format = "coco_panoptic"`.
+                relevant in case [`ConditionalDETRFeatureExtractor`] was initialized with `format = "coco_panoptic"`.
 
             pad_and_return_pixel_mask (`bool`, *optional*, defaults to `True`):
                 Whether or not to pad images up to the largest image in a batch and create a pixel mask.
@@ -546,7 +546,7 @@ class DetrFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
             if annotations is not None:
                 annotations = [annotations]
 
-        # prepare (COCO annotations as a list of Dict -> DETR target as a single Dict per image)
+        # prepare (COCO annotations as a list of Dict -> CONDITIONAL_DETR target as a single Dict per image)
         if annotations is not None:
             for idx, (image, target) in enumerate(zip(images, annotations)):
                 if not isinstance(image, Image.Image):
@@ -672,14 +672,14 @@ class DetrFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
         return encoded_inputs
 
     # POSTPROCESSING METHODS
-    # inspired by https://github.com/facebookresearch/detr/blob/master/models/detr.py#L258
+    # inspired by https://github.com/facebookresearch/conditional_detr/blob/master/models/conditional_detr.py#L258
     def post_process(self, outputs, target_sizes):
         """
-        Converts the output of [`DetrForObjectDetection`] into the format expected by the COCO api. Only supports
+        Converts the output of [`ConditionalDETRForObjectDetection`] into the format expected by the COCO api. Only supports
         PyTorch.
 
         Args:
-            outputs ([`DetrObjectDetectionOutput`]):
+            outputs ([`ConditionalDETRObjectDetectionOutput`]):
                 Raw outputs of the model.
             target_sizes (`torch.Tensor` of shape `(batch_size, 2)`):
                 Tensor containing the size (h, w) of each image of the batch. For evaluation, this must be the original
@@ -697,14 +697,11 @@ class DetrFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
         if target_sizes.shape[1] != 2:
             raise ValueError("Each element of target_sizes must contain the size (h, w) of each image of the batch")
 
-        prob = out_logits.sigmoid()
-        topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), 100, dim=1)
-        scores = topk_values
-        topk_boxes = topk_indexes // out_logits.shape[2]
-        labels = topk_indexes % out_logits.shape[2]
+        prob = nn.functional.softmax(out_logits, -1)
+        scores, labels = prob[..., :-1].max(-1)
+
+        # convert to [x0, y0, x1, y1] format
         boxes = center_to_corners_format(out_bbox)
-        boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
-        
         # and from relative [0, 1] to absolute [0, height] coordinates
         img_h, img_w = target_sizes.unbind(1)
         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
@@ -716,10 +713,10 @@ class DetrFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
 
     def post_process_segmentation(self, outputs, target_sizes, threshold=0.9, mask_threshold=0.5):
         """
-        Converts the output of [`DetrForSegmentation`] into image segmentation predictions. Only supports PyTorch.
+        Converts the output of [`ConditionalDETRForSegmentation`] into image segmentation predictions. Only supports PyTorch.
 
         Parameters:
-            outputs ([`DetrSegmentationOutput`]):
+            outputs ([`ConditionalDETRSegmentationOutput`]):
                 Raw outputs of the model.
             target_sizes (`torch.Tensor` of shape `(batch_size, 2)` or `List[Tuple]` of length `batch_size`):
                 Torch Tensor (or list) corresponding to the requested final size (h, w) of each prediction.
@@ -755,17 +752,17 @@ class DetrFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
             preds.append(predictions)
         return preds
 
-    # inspired by https://github.com/facebookresearch/detr/blob/master/models/segmentation.py#L218
+    # inspired by https://github.com/facebookresearch/conditional_detr/blob/master/models/segmentation.py#L218
     def post_process_instance(self, results, outputs, orig_target_sizes, max_target_sizes, threshold=0.5):
         """
-        Converts the output of [`DetrForSegmentation`] into actual instance segmentation predictions. Only supports
+        Converts the output of [`ConditionalDETRForSegmentation`] into actual instance segmentation predictions. Only supports
         PyTorch.
 
         Args:
             results (`List[Dict]`):
-                Results list obtained by [`~DetrFeatureExtractor.post_process`], to which "masks" results will be
+                Results list obtained by [`~ConditionalDETRFeatureExtractor.post_process`], to which "masks" results will be
                 added.
-            outputs ([`DetrSegmentationOutput`]):
+            outputs ([`ConditionalDETRSegmentationOutput`]):
                 Raw outputs of the model.
             orig_target_sizes (`torch.Tensor` of shape `(batch_size, 2)`):
                 Tensor containing the size (h, w) of each image of the batch. For evaluation, this must be the original
@@ -799,13 +796,13 @@ class DetrFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtractionMixin):
 
         return results
 
-    # inspired by https://github.com/facebookresearch/detr/blob/master/models/segmentation.py#L241
+    # inspired by https://github.com/facebookresearch/conditional_detr/blob/master/models/segmentation.py#L241
     def post_process_panoptic(self, outputs, processed_sizes, target_sizes=None, is_thing_map=None, threshold=0.85):
         """
-        Converts the output of [`DetrForSegmentation`] into actual panoptic predictions. Only supports PyTorch.
+        Converts the output of [`ConditionalDETRForSegmentation`] into actual panoptic predictions. Only supports PyTorch.
 
         Parameters:
-            outputs ([`DetrSegmentationOutput`]):
+            outputs ([`ConditionalDETRSegmentationOutput`]):
                 Raw outputs of the model.
             processed_sizes (`torch.Tensor` of shape `(batch_size, 2)` or `List[Tuple]` of length `batch_size`):
                 Torch Tensor (or list) containing the size (h, w) of each image of the batch, i.e. the size after data

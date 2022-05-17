@@ -22,7 +22,7 @@ from ...utils import OptionalDependencyNotAvailable, _LazyModule, is_timm_availa
 
 
 _import_structure = {
-    "configuration_detr": ["DETR_PRETRAINED_CONFIG_ARCHIVE_MAP", "DetrConfig"],
+    "configuration_conditional_detr": ["CONDITIONAL_DETR_PRETRAINED_CONFIG_ARCHIVE_MAP", "ConditionalDETRConfig"],
 }
 
 try:
@@ -31,7 +31,7 @@ try:
 except OptionalDependencyNotAvailable:
     pass
 else:
-    _import_structure["feature_extraction_detr"] = ["DetrFeatureExtractor"]
+    _import_structure["feature_extraction_conditional_detr"] = ["ConditionalDETRFeatureExtractor"]
 
 try:
     if not is_timm_available():
@@ -39,17 +39,17 @@ try:
 except OptionalDependencyNotAvailable:
     pass
 else:
-    _import_structure["modeling_detr"] = [
-        "DETR_PRETRAINED_MODEL_ARCHIVE_LIST",
-        "DetrForObjectDetection",
-        "DetrForSegmentation",
-        "DetrModel",
-        "DetrPreTrainedModel",
+    _import_structure["modeling_conditional_detr"] = [
+        "CONDITIONAL_DETR_PRETRAINED_MODEL_ARCHIVE_LIST",
+        "ConditionalDETRForObjectDetection",
+        "ConditionalDETRForSegmentation",
+        "ConditionalDETRModel",
+        "ConditionalDETRPreTrainedModel",
     ]
 
 
 if TYPE_CHECKING:
-    from .configuration_detr import DETR_PRETRAINED_CONFIG_ARCHIVE_MAP, DetrConfig
+    from .configuration_conditional_detr import CONDITIONAL_DETR_PRETRAINED_CONFIG_ARCHIVE_MAP, ConditionalDETRConfig
 
     try:
         if not is_vision_available():
@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     except OptionalDependencyNotAvailable:
         pass
     else:
-        from .feature_extraction_detr import DetrFeatureExtractor
+        from .feature_extraction_conditional_detr import ConditionalDETRFeatureExtractor
 
     try:
         if not is_timm_available():
@@ -66,11 +66,11 @@ if TYPE_CHECKING:
         pass
     else:
         from .modeling_conditional_detr import (
-            DETR_PRETRAINED_MODEL_ARCHIVE_LIST,
-            DetrForObjectDetection,
-            DetrForSegmentation,
-            DetrModel,
-            DetrPreTrainedModel,
+            CONDITIONAL_DETR_PRETRAINED_MODEL_ARCHIVE_LIST,
+            ConditionalDETRForObjectDetection,
+            ConditionalDETRForSegmentation,
+            ConditionalDETRModel,
+            ConditionalDETRPreTrainedModel,
         )
 
 else:

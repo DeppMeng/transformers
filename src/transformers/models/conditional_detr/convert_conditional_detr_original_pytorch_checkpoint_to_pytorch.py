@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Convert conditional DETR checkpoints."""
+"""Convert CONDITIONAL_DETR checkpoints."""
 
 
 import argparse
@@ -25,7 +25,7 @@ from PIL import Image
 
 import requests
 from huggingface_hub import hf_hub_download
-from transformers import DetrConfig, DetrFeatureExtractor, DetrForObjectDetection, DetrForSegmentation
+from transformers import ConditionalDETRConfig, ConditionalDETRFeatureExtractor, ConditionalDETRForObjectDetection, ConditionalDETRForSegmentation
 from transformers.utils import logging
 
 
@@ -88,33 +88,7 @@ for i in range(6):
     rename_keys.append((f"transformer.decoder.layers.{i}.norm3.weight", f"decoder.layers.{i}.final_layer_norm.weight"))
     rename_keys.append((f"transformer.decoder.layers.{i}.norm3.bias", f"decoder.layers.{i}.final_layer_norm.bias"))
 
-    # q, k, v projections in self/cross-attention in decoder for conditional DETR
-    rename_keys.append((f"transformer.decoder.layers.{i}.sa_qcontent_proj.weight", f"decoder.layers.{i}.sa_qcontent_proj.weight"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.sa_kcontent_proj.weight", f"decoder.layers.{i}.sa_kcontent_proj.weight"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.sa_qpos_proj.weight", f"decoder.layers.{i}.sa_qpos_proj.weight"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.sa_kpos_proj.weight", f"decoder.layers.{i}.sa_kpos_proj.weight"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.sa_v_proj.weight", f"decoder.layers.{i}.sa_v_proj.weight"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_qcontent_proj.weight", f"decoder.layers.{i}.ca_qcontent_proj.weight"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_qpos_proj.weight", f"decoder.layers.{i}.ca_qpos_proj.weight"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_kcontent_proj.weight", f"decoder.layers.{i}.ca_kcontent_proj.weight"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_kpos_proj.weight", f"decoder.layers.{i}.ca_kpos_proj.weight"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_v_proj.weight", f"decoder.layers.{i}.ca_v_proj.weight"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_qpos_sine_proj.weight", f"decoder.layers.{i}.ca_qpos_sine_proj.weight"))
-
-    rename_keys.append((f"transformer.decoder.layers.{i}.sa_qcontent_proj.bias", f"decoder.layers.{i}.sa_qcontent_proj.bias"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.sa_kcontent_proj.bias", f"decoder.layers.{i}.sa_kcontent_proj.bias"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.sa_qpos_proj.bias", f"decoder.layers.{i}.sa_qpos_proj.bias"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.sa_kpos_proj.bias", f"decoder.layers.{i}.sa_kpos_proj.bias"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.sa_v_proj.bias", f"decoder.layers.{i}.sa_v_proj.bias"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_qcontent_proj.bias", f"decoder.layers.{i}.ca_qcontent_proj.bias"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_qpos_proj.bias", f"decoder.layers.{i}.ca_qpos_proj.bias"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_kcontent_proj.bias", f"decoder.layers.{i}.ca_kcontent_proj.bias"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_kpos_proj.bias", f"decoder.layers.{i}.ca_kpos_proj.bias"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_v_proj.bias", f"decoder.layers.{i}.ca_v_proj.bias"))
-    rename_keys.append((f"transformer.decoder.layers.{i}.ca_qpos_sine_proj.bias", f"decoder.layers.{i}.ca_qpos_sine_proj.bias"))
-
 # convolutional projection + query embeddings + layernorm of decoder + class and bounding box heads
-# for conditional DETR, also convert reference point head and query scale MLP
 rename_keys.extend(
     [
         ("input_proj.weight", "input_projection.weight"),
@@ -130,14 +104,6 @@ rename_keys.extend(
         ("bbox_embed.layers.1.bias", "bbox_predictor.layers.1.bias"),
         ("bbox_embed.layers.2.weight", "bbox_predictor.layers.2.weight"),
         ("bbox_embed.layers.2.bias", "bbox_predictor.layers.2.bias"),
-        ("transformer.decoder.ref_point_head.layers.0.weight", "decoder.ref_point_head.layers.0.weight"),
-        ("transformer.decoder.ref_point_head.layers.0.bias", "decoder.ref_point_head.layers.0.bias"),
-        ("transformer.decoder.ref_point_head.layers.1.weight", "decoder.ref_point_head.layers.1.weight"),
-        ("transformer.decoder.ref_point_head.layers.1.bias", "decoder.ref_point_head.layers.1.bias"),
-        ("transformer.decoder.query_scale.layers.0.weight", "decoder.query_scale.layers.0.weight"),
-        ("transformer.decoder.query_scale.layers.0.bias", "decoder.query_scale.layers.0.bias"),
-        ("transformer.decoder.query_scale.layers.1.weight", "decoder.query_scale.layers.1.weight"),
-        ("transformer.decoder.query_scale.layers.1.bias", "decoder.query_scale.layers.1.bias")
     ]
 )
 
@@ -162,7 +128,7 @@ def rename_backbone_keys(state_dict):
 def read_in_q_k_v(state_dict, is_panoptic=False):
     prefix = ""
     if is_panoptic:
-        prefix = "detr."
+        prefix = "conditional_detr."
 
     # first: transformer encoder
     for i in range(6):
@@ -177,7 +143,29 @@ def read_in_q_k_v(state_dict, is_panoptic=False):
         state_dict[f"encoder.layers.{i}.self_attn.v_proj.weight"] = in_proj_weight[-256:, :]
         state_dict[f"encoder.layers.{i}.self_attn.v_proj.bias"] = in_proj_bias[-256:]
     # next: transformer decoder (which is a bit more complex because it also includes cross-attention)
-    # TODO
+    for i in range(6):
+        # read in weights + bias of input projection layer of self-attention
+        in_proj_weight = state_dict.pop(f"{prefix}transformer.decoder.layers.{i}.self_attn.in_proj_weight")
+        in_proj_bias = state_dict.pop(f"{prefix}transformer.decoder.layers.{i}.self_attn.in_proj_bias")
+        # next, add query, keys and values (in that order) to the state dict
+        state_dict[f"decoder.layers.{i}.self_attn.q_proj.weight"] = in_proj_weight[:256, :]
+        state_dict[f"decoder.layers.{i}.self_attn.q_proj.bias"] = in_proj_bias[:256]
+        state_dict[f"decoder.layers.{i}.self_attn.k_proj.weight"] = in_proj_weight[256:512, :]
+        state_dict[f"decoder.layers.{i}.self_attn.k_proj.bias"] = in_proj_bias[256:512]
+        state_dict[f"decoder.layers.{i}.self_attn.v_proj.weight"] = in_proj_weight[-256:, :]
+        state_dict[f"decoder.layers.{i}.self_attn.v_proj.bias"] = in_proj_bias[-256:]
+        # read in weights + bias of input projection layer of cross-attention
+        in_proj_weight_cross_attn = state_dict.pop(
+            f"{prefix}transformer.decoder.layers.{i}.multihead_attn.in_proj_weight"
+        )
+        in_proj_bias_cross_attn = state_dict.pop(f"{prefix}transformer.decoder.layers.{i}.multihead_attn.in_proj_bias")
+        # next, add query, keys and values (in that order) of cross-attention to the state dict
+        state_dict[f"decoder.layers.{i}.encoder_attn.q_proj.weight"] = in_proj_weight_cross_attn[:256, :]
+        state_dict[f"decoder.layers.{i}.encoder_attn.q_proj.bias"] = in_proj_bias_cross_attn[:256]
+        state_dict[f"decoder.layers.{i}.encoder_attn.k_proj.weight"] = in_proj_weight_cross_attn[256:512, :]
+        state_dict[f"decoder.layers.{i}.encoder_attn.k_proj.bias"] = in_proj_bias_cross_attn[256:512]
+        state_dict[f"decoder.layers.{i}.encoder_attn.v_proj.weight"] = in_proj_weight_cross_attn[-256:, :]
+        state_dict[f"decoder.layers.{i}.encoder_attn.v_proj.bias"] = in_proj_bias_cross_attn[-256:]
 
 
 # We will verify our results on an image of cute cats
@@ -189,13 +177,13 @@ def prepare_img():
 
 
 @torch.no_grad()
-def convert_detr_checkpoint(model_name, pytorch_dump_folder_path):
+def convert_conditional_detr_checkpoint(model_name, pytorch_dump_folder_path):
     """
-    Copy/paste/tweak model's weights to our DETR structure.
+    Copy/paste/tweak model's weights to our CONDITIONAL_DETR structure.
     """
 
     # load default config
-    config = DetrConfig()
+    config = ConditionalDETRConfig()
     # set backbone and dilation attributes
     if "resnet101" in model_name:
         config.backbone = "resnet101"
@@ -215,7 +203,7 @@ def convert_detr_checkpoint(model_name, pytorch_dump_folder_path):
 
     # load feature extractor
     format = "coco_panoptic" if is_panoptic else "coco_detection"
-    feature_extractor = DetrFeatureExtractor(format=format)
+    feature_extractor = ConditionalDETRFeatureExtractor(format=format)
 
     # prepare image
     img = prepare_img()
@@ -225,30 +213,30 @@ def convert_detr_checkpoint(model_name, pytorch_dump_folder_path):
     logger.info(f"Converting model {model_name}...")
 
     # load original model from torch hub
-    detr = torch.hub.load("facebookresearch/detr", model_name, pretrained=True).eval()
-    state_dict = detr.state_dict()
+    conditional_detr = torch.hub.load("facebookresearch/conditional_detr", model_name, pretrained=True).eval()
+    state_dict = conditional_detr.state_dict()
     # rename keys
     for src, dest in rename_keys:
         if is_panoptic:
-            src = "detr." + src
+            src = "conditional_detr." + src
         rename_key(state_dict, src, dest)
     state_dict = rename_backbone_keys(state_dict)
     # query, key and value matrices need special treatment
     read_in_q_k_v(state_dict, is_panoptic=is_panoptic)
     # important: we need to prepend a prefix to each of the base model keys as the head models use different attributes for them
-    prefix = "detr.model." if is_panoptic else "model."
+    prefix = "conditional_detr.model." if is_panoptic else "model."
     for key in state_dict.copy().keys():
         if is_panoptic:
             if (
-                key.startswith("detr")
+                key.startswith("conditional_detr")
                 and not key.startswith("class_labels_classifier")
                 and not key.startswith("bbox_predictor")
             ):
                 val = state_dict.pop(key)
-                state_dict["detr.model" + key[4:]] = val
+                state_dict["conditional_detr.model" + key[4:]] = val
             elif "class_labels_classifier" in key or "bbox_predictor" in key:
                 val = state_dict.pop(key)
-                state_dict["detr." + key] = val
+                state_dict["conditional_detr." + key] = val
             elif key.startswith("bbox_attention") or key.startswith("mask_head"):
                 continue
             else:
@@ -259,11 +247,11 @@ def convert_detr_checkpoint(model_name, pytorch_dump_folder_path):
                 val = state_dict.pop(key)
                 state_dict[prefix + key] = val
     # finally, create HuggingFace model and load state dict
-    model = DetrForSegmentation(config) if is_panoptic else DetrForObjectDetection(config)
+    model = ConditionalDETRForSegmentation(config) if is_panoptic else ConditionalDETRForObjectDetection(config)
     model.load_state_dict(state_dict)
     model.eval()
     # verify our conversion
-    original_outputs = detr(pixel_values)
+    original_outputs = conditional_detr(pixel_values)
     outputs = model(pixel_values)
     assert torch.allclose(outputs.logits, original_outputs["pred_logits"], atol=1e-4)
     assert torch.allclose(outputs.pred_boxes, original_outputs["pred_boxes"], atol=1e-4)
@@ -281,10 +269,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--model_name", default="detr_resnet50", type=str, help="Name of the DETR model you'd like to convert."
+        "--model_name", default="conditional_detr_resnet50", type=str, help="Name of the CONDITIONAL_DETR model you'd like to convert."
     )
     parser.add_argument(
         "--pytorch_dump_folder_path", default=None, type=str, help="Path to the folder to output PyTorch model."
     )
     args = parser.parse_args()
-    convert_detr_checkpoint(args.model_name, args.pytorch_dump_folder_path)
+    convert_conditional_detr_checkpoint(args.model_name, args.pytorch_dump_folder_path)

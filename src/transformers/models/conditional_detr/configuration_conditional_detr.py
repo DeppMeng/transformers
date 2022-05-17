@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" DETR model configuration"""
+""" CONDITIONAL_DETR model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -20,18 +20,18 @@ from ...utils import logging
 
 logger = logging.get_logger(__name__)
 
-DETR_PRETRAINED_CONFIG_ARCHIVE_MAP = {
-    "facebook/detr-resnet-50": "https://huggingface.co/facebook/detr-resnet-50/resolve/main/config.json",
-    # See all DETR models at https://huggingface.co/models?filter=detr
+CONDITIONAL_DETR_PRETRAINED_CONFIG_ARCHIVE_MAP = {
+    "Atten4Vis/ConditionalDETR": "https://huggingface.co/Atten4Vis/ConditionalDETR/resolve/main/config.json",
 }
 
 
-class DetrConfig(PretrainedConfig):
+
+class ConditionalDETRConfig(PretrainedConfig):
     r"""
-    This is the configuration class to store the configuration of a [`DetrModel`]. It is used to instantiate a DETR
+    This is the configuration class to store the configuration of a [`ConditionalDETRModel`]. It is used to instantiate a CONDITIONAL_DETR
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
-    defaults will yield a similar configuration to that of the DETR
-    [facebook/detr-resnet-50](https://huggingface.co/facebook/detr-resnet-50) architecture.
+    defaults will yield a similar configuration to that of the CONDITIONAL_DETR
+    [Atten4Vis/ConditionalDETR](https://huggingface.co/Atten4Vis/ConditionalDETR) architecture.
 
     Configuration objects inherit from [`PretrainedConfig`] and can be used to control the model outputs. Read the
     documentation from [`PretrainedConfig`] for more information.
@@ -39,7 +39,7 @@ class DetrConfig(PretrainedConfig):
 
     Args:
         num_queries (`int`, *optional*, defaults to 100):
-            Number of object queries, i.e. detection slots. This is the maximal number of objects [`DetrModel`] can
+            Number of object queries, i.e. detection slots. This is the maximal number of objects [`ConditionalDETRModel`] can
             detect in a single image. For COCO, we recommend 100 queries.
         d_model (`int`, *optional*, defaults to 256):
             Dimension of the layers.
@@ -104,18 +104,18 @@ class DetrConfig(PretrainedConfig):
     Examples:
 
     ```python
-    >>> from transformers import DetrModel, DetrConfig
+    >>> from transformers import ConditionalDETRModel, ConditionalDETRConfig
 
-    >>> # Initializing a DETR facebook/detr-resnet-50 style configuration
-    >>> configuration = DetrConfig()
+    >>> # Initializing a CONDITIONAL_DETR Atten4Vis/ConditionalDETR style configuration
+    >>> configuration = ConditionalDETRConfig()
 
-    >>> # Initializing a model from the facebook/detr-resnet-50 style configuration
-    >>> model = DetrModel(configuration)
+    >>> # Initializing a model from the Atten4Vis/ConditionalDETR style configuration
+    >>> model = ConditionalDETRModel(configuration)
 
     >>> # Accessing the model configuration
     >>> configuration = model.config
     ```"""
-    model_type = "detr"
+    model_type = "conditional_detr"
     keys_to_ignore_at_inference = ["past_key_values"]
     attribute_map = {
         "hidden_size": "d_model",

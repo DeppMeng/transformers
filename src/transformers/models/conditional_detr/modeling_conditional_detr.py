@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch DETR model."""
+""" PyTorch CONDITIONAL_DETR model."""
 
 
 import math
@@ -23,6 +23,8 @@ from typing import Dict, List, Optional, Tuple
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
+
+from transformers.models.conditional_detr_source.modeling_conditional_detr import DetrAttention
 
 from ...activations import ACT2FN
 from ...modeling_outputs import BaseModelOutput, BaseModelOutputWithCrossAttentions, Seq2SeqModelOutput
@@ -39,33 +41,34 @@ from ...utils import (
     replace_return_docstrings,
     requires_backends,
 )
-from .configuration_detr import DetrConfig
+from .configuration_conditional_detr import ConditionalDETRConfig
 
 
 if is_scipy_available():
     from scipy.optimize import linear_sum_assignment
 
 if is_vision_available():
-    from .feature_extraction_detr import center_to_corners_format
+    from .feature_extraction_conditional_detr import center_to_corners_format
 
 if is_timm_available():
     from timm import create_model
 
 logger = logging.get_logger(__name__)
 
-_CONFIG_FOR_DOC = "DetrConfig"
-_CHECKPOINT_FOR_DOC = "facebook/detr-resnet-50"
+_CONFIG_FOR_DOC = "ConditionalDETRConfig"
+_CHECKPOINT_FOR_DOC = "Atten4Vis/ConditionalDETR"
 
-DETR_PRETRAINED_MODEL_ARCHIVE_LIST = [
-    "facebook/detr-resnet-50",
-    # See all DETR models at https://huggingface.co/models?filter=detr
+CONDITIONAL_DETR_PRETRAINED_MODEL_ARCHIVE_LIST = [
+    "Atten4Vis/ConditionalDETR",
+    # See all conditional_detr models at https://huggingface.co/models?filter=conditional_detr
 ]
 
 
+
 @dataclass
-class DetrDecoderOutput(BaseModelOutputWithCrossAttentions):
+class ConditionalDETRDecoderOutput(BaseModelOutputWithCrossAttentions):
     """
-    Base class for outputs of the DETR decoder. This class adds one attribute to BaseModelOutputWithCrossAttentions,
+    Base class for outputs of the CONDITIONAL_DETR decoder. This class adds one attribute to BaseModelOutputWithCrossAttentions,
     namely an optional stack of intermediate decoder activations, i.e. the output of each decoder layer, each of them
     gone through a layernorm. This is useful when training the model with auxiliary decoding losses.
 
@@ -94,9 +97,9 @@ class DetrDecoderOutput(BaseModelOutputWithCrossAttentions):
 
 
 @dataclass
-class DetrModelOutput(Seq2SeqModelOutput):
+class ConditionalDETRModelOutput(Seq2SeqModelOutput):
     """
-    Base class for outputs of the DETR encoder-decoder model. This class adds one attribute to Seq2SeqModelOutput,
+    Base class for outputs of the CONDITIONAL_DETR encoder-decoder model. This class adds one attribute to Seq2SeqModelOutput,
     namely an optional stack of intermediate decoder activations, i.e. the output of each decoder layer, each of them
     gone through a layernorm. This is useful when training the model with auxiliary decoding losses.
 
@@ -135,9 +138,10 @@ class DetrModelOutput(Seq2SeqModelOutput):
 
 
 @dataclass
-class DetrObjectDetectionOutput(ModelOutput):
+# Copied from transformers.models.detr.modeling_detr.DetrObjectDetectionOutput with Detr->ConditionalDETR
+class ConditionalDETRObjectDetectionOutput(ModelOutput):
     """
-    Output type of [`DetrForObjectDetection`].
+    Output type of [`ConditionalDETRForObjectDetection`].
 
     Args:
         loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` are provided)):
@@ -151,7 +155,7 @@ class DetrObjectDetectionOutput(ModelOutput):
         pred_boxes (`torch.FloatTensor` of shape `(batch_size, num_queries, 4)`):
             Normalized boxes coordinates for all queries, represented as (center_x, center_y, width, height). These
             values are normalized in [0, 1], relative to the size of each individual image in the batch (disregarding
-            possible padding). You can use [`~DetrFeatureExtractor.post_process`] to retrieve the unnormalized bounding
+            possible padding). You can use [`~ConditionalDETRFeatureExtractor.post_process`] to retrieve the unnormalized bounding
             boxes.
         auxiliary_outputs (`list[Dict]`, *optional*):
             Optional, only returned when auxilary losses are activated (i.e. `config.auxiliary_loss` is set to `True`)
@@ -198,9 +202,10 @@ class DetrObjectDetectionOutput(ModelOutput):
 
 
 @dataclass
-class DetrSegmentationOutput(ModelOutput):
+# Copied from transformers.models.detr.modeling_detr.DetrSegmentationOutput with Detr->ConditionalDETR
+class ConditionalDETRSegmentationOutput(ModelOutput):
     """
-    Output type of [`DetrForSegmentation`].
+    Output type of [`ConditionalDETRForSegmentation`].
 
     Args:
         loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` are provided)):
@@ -214,11 +219,11 @@ class DetrSegmentationOutput(ModelOutput):
         pred_boxes (`torch.FloatTensor` of shape `(batch_size, num_queries, 4)`):
             Normalized boxes coordinates for all queries, represented as (center_x, center_y, width, height). These
             values are normalized in [0, 1], relative to the size of each individual image in the batch (disregarding
-            possible padding). You can use [`~DetrFeatureExtractor.post_process`] to retrieve the unnormalized bounding
+            possible padding). You can use [`~ConditionalDETRFeatureExtractor.post_process`] to retrieve the unnormalized bounding
             boxes.
         pred_masks (`torch.FloatTensor` of shape `(batch_size, num_queries, height/4, width/4)`):
-            Segmentation masks logits for all queries. See also [`~DetrFeatureExtractor.post_process_segmentation`] or
-            [`~DetrFeatureExtractor.post_process_panoptic`] to evaluate instance and panoptic segmentation masks
+            Segmentation masks logits for all queries. See also [`~ConditionalDETRFeatureExtractor.post_process_segmentation`] or
+            [`~ConditionalDETRFeatureExtractor.post_process_panoptic`] to evaluate instance and panoptic segmentation masks
             respectively.
         auxiliary_outputs (`list[Dict]`, *optional*):
             Optional, only returned when auxiliary losses are activated (i.e. `config.auxiliary_loss` is set to `True`)
@@ -267,7 +272,8 @@ class DetrSegmentationOutput(ModelOutput):
 
 # BELOW: utilities copied from
 # https://github.com/facebookresearch/detr/blob/master/backbone.py
-class DetrFrozenBatchNorm2d(nn.Module):
+# Copied from transformers.models.detr.modeling_detr.DetrFrozenBatchNorm2d with Detr->ConditionalDETR
+class ConditionalDETRFrozenBatchNorm2d(nn.Module):
     """
     BatchNorm2d where the batch statistics and the affine parameters are fixed.
 
@@ -276,7 +282,7 @@ class DetrFrozenBatchNorm2d(nn.Module):
     """
 
     def __init__(self, n):
-        super(DetrFrozenBatchNorm2d, self).__init__()
+        super(ConditionalDETRFrozenBatchNorm2d, self).__init__()
         self.register_buffer("weight", torch.ones(n))
         self.register_buffer("bias", torch.zeros(n))
         self.register_buffer("running_mean", torch.zeros(n))
@@ -289,7 +295,7 @@ class DetrFrozenBatchNorm2d(nn.Module):
         if num_batches_tracked_key in state_dict:
             del state_dict[num_batches_tracked_key]
 
-        super(DetrFrozenBatchNorm2d, self)._load_from_state_dict(
+        super(ConditionalDETRFrozenBatchNorm2d, self)._load_from_state_dict(
             state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
         )
 
@@ -306,11 +312,12 @@ class DetrFrozenBatchNorm2d(nn.Module):
         return x * scale + bias
 
 
+# Copied from transformers.models.detr.modeling_detr.replace_batch_norm with Detr->ConditionalDETR
 def replace_batch_norm(m, name=""):
     for attr_str in dir(m):
         target_attr = getattr(m, attr_str)
         if isinstance(target_attr, nn.BatchNorm2d):
-            frozen = DetrFrozenBatchNorm2d(target_attr.num_features)
+            frozen = ConditionalDETRFrozenBatchNorm2d(target_attr.num_features)
             bn = getattr(m, attr_str)
             frozen.weight.data.copy_(bn.weight)
             frozen.bias.data.copy_(bn.bias)
@@ -321,11 +328,12 @@ def replace_batch_norm(m, name=""):
         replace_batch_norm(ch, n)
 
 
-class DetrTimmConvEncoder(nn.Module):
+# Copied from transformers.models.detr.modeling_detr.DetrTimmConvEncoder with Detr->ConditionalDETR
+class ConditionalDETRTimmConvEncoder(nn.Module):
     """
     Convolutional encoder (backbone) from the timm library.
 
-    nn.BatchNorm2d layers are replaced by DetrFrozenBatchNorm2d as defined above.
+    nn.BatchNorm2d layers are replaced by ConditionalDETRFrozenBatchNorm2d as defined above.
 
     """
 
@@ -362,7 +370,8 @@ class DetrTimmConvEncoder(nn.Module):
         return out
 
 
-class DetrConvModel(nn.Module):
+# Copied from transformers.models.detr.modeling_detr.DetrConvModel with Detr->ConditionalDETR
+class ConditionalDETRConvModel(nn.Module):
     """
     This module adds 2D position embeddings to all intermediate feature maps of the convolutional encoder.
     """
@@ -397,7 +406,8 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] 
     return inverted_mask.masked_fill(inverted_mask.bool(), torch.finfo(dtype).min)
 
 
-class DetrSinePositionEmbedding(nn.Module):
+# Copied from transformers.models.detr.modeling_detr.DetrSinePositionEmbedding with Detr->ConditionalDETR
+class ConditionalDETRSinePositionEmbedding(nn.Module):
     """
     This is a more standard version of the position embedding, very similar to the one used by the Attention is all you
     need paper, generalized to work on images.
@@ -434,7 +444,8 @@ class DetrSinePositionEmbedding(nn.Module):
         return pos
 
 
-class DetrLearnedPositionEmbedding(nn.Module):
+# Copied from transformers.models.detr.modeling_detr.DetrLearnedPositionEmbedding with Detr->ConditionalDETR
+class ConditionalDETRLearnedPositionEmbedding(nn.Module):
     """
     This module learns positional embeddings up to a fixed maximum size.
     """
@@ -457,13 +468,14 @@ class DetrLearnedPositionEmbedding(nn.Module):
         return pos
 
 
+# Copied from transformers.models.detr.modeling_detr.build_position_encoding with Detr->ConditionalDETR
 def build_position_encoding(config):
     n_steps = config.d_model // 2
     if config.position_embedding_type == "sine":
         # TODO find a better way of exposing other arguments
-        position_embedding = DetrSinePositionEmbedding(n_steps, normalize=True)
+        position_embedding = ConditionalDETRSinePositionEmbedding(n_steps, normalize=True)
     elif config.position_embedding_type == "learned":
-        position_embedding = DetrLearnedPositionEmbedding(n_steps)
+        position_embedding = ConditionalDETRLearnedPositionEmbedding(n_steps)
     else:
         raise ValueError(f"Not supported {config.position_embedding_type}")
 
@@ -489,11 +501,12 @@ def inverse_sigmoid(x, eps=1e-5):
     x2 = (1 - x).clamp(min=eps)
     return torch.log(x1/x2)
 
-class DetrAttention(nn.Module):
+# Copied from transformers.models.detr.modeling_detr.DetrAttention with DETR->CONDITIONAL_DETR,Detr->ConditionalDETR
+class ConditionalDETRAttention(nn.Module):
     """
     Multi-headed attention from 'Attention Is All You Need' paper.
 
-    Here, we add position embeddings to the queries and keys (as explained in the DETR paper).
+    Here, we add position embeddings to the queries and keys (as explained in the CONDITIONAL_DETR paper).
     """
 
     def __init__(
@@ -615,7 +628,7 @@ class DetrAttention(nn.Module):
 
         return attn_output, attn_weights_reshaped
 
-class ConditionalDetrDecoupledAttention(nn.Module):
+class ConditionalDETRDecoupledAttention(nn.Module):
     """
     Cross-Attention used in Conditional DETR 'Conditional DETR for Fast Training Convergence' paper.
 
@@ -734,8 +747,10 @@ class ConditionalDetrDecoupledAttention(nn.Module):
         return attn_output, attn_weights_reshaped
 
 
-class DetrEncoderLayer(nn.Module):
-    def __init__(self, config: DetrConfig):
+
+# Copied from transformers.models.detr.modeling_detr.DetrEncoderLayer with Detr->ConditionalDETR
+class ConditionalDETREncoderLayer(nn.Module):
+    def __init__(self, config: ConditionalDETRConfig):
         super().__init__()
         self.embed_dim = config.d_model
         self.self_attn = DetrAttention(
@@ -803,8 +818,8 @@ class DetrEncoderLayer(nn.Module):
         return outputs
 
 
-class DetrDecoderLayer(nn.Module):
-    def __init__(self, config: DetrConfig):
+class ConditionalDETRDecoderLayer(nn.Module):
+    def __init__(self, config: ConditionalDETRConfig):
         super().__init__()
         self.embed_dim = config.d_model
 
@@ -816,7 +831,7 @@ class DetrDecoderLayer(nn.Module):
         self.sa_kpos_proj = nn.Linear(d_model, d_model)
         self.sa_v_proj = nn.Linear(d_model, d_model)
         
-        self.self_attn = ConditionalDetrDecoupledAttention(
+        self.self_attn = ConditionalDETRAttention(
             embed_dim=self.embed_dim,
             out_dim=self.embed_dim,
             num_heads=config.decoder_attention_heads,
@@ -827,7 +842,7 @@ class DetrDecoderLayer(nn.Module):
         self.activation_dropout = config.activation_dropout
 
         self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
-
+        
 
         # Decoder Cross-Attention projections
         self.ca_qcontent_proj = nn.Linear(d_model, d_model)
@@ -837,7 +852,7 @@ class DetrDecoderLayer(nn.Module):
         self.ca_v_proj = nn.Linear(d_model, d_model)
         self.ca_qpos_sine_proj = nn.Linear(d_model, d_model)
 
-        self.encoder_attn = ConditionalDetrDecoupledAttention(
+        self.encoder_attn = ConditionalDETRAttention(
             self.embed_dim*2,
             self.embed_dim,
             config.decoder_attention_heads,
@@ -897,6 +912,17 @@ class DetrDecoderLayer(nn.Module):
         q = q_content + q_pos
         k = k_content + k_pos
         # Self Attention
+        hidden_states, self_attn_weights = self.self_attn(
+            hidden_states=hidden_states,
+            position_embeddings=query_position_embeddings,
+            attention_mask=attention_mask,
+            output_attentions=output_attentions,
+        )
+
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = residual + hidden_states
+        hidden_states = self.self_attn_layer_norm(hidden_states)
+
         hidden_states, self_attn_weights = self.self_attn(
             hidden_states=q,
             attention_mask=attention_mask,
@@ -973,7 +999,8 @@ class DetrDecoderLayer(nn.Module):
         return outputs
 
 
-class DetrClassificationHead(nn.Module):
+# Copied from transformers.models.detr.modeling_detr.DetrClassificationHead with Detr->ConditionalDETR
+class ConditionalDETRClassificationHead(nn.Module):
     """Head for sentence-level classification tasks."""
 
     def __init__(self, input_dim: int, inner_dim: int, num_classes: int, pooler_dropout: float):
@@ -1005,8 +1032,9 @@ class MLP(nn.Module):
         return x
 
 
-class DetrPreTrainedModel(PreTrainedModel):
-    config_class = DetrConfig
+# Copied from transformers.models.detr.modeling_detr.DetrPreTrainedModel with Detr->ConditionalDETR
+class ConditionalDETRPreTrainedModel(PreTrainedModel):
+    config_class = ConditionalDETRConfig
     base_model_prefix = "model"
     main_input_name = "pixel_values"
 
@@ -1014,12 +1042,12 @@ class DetrPreTrainedModel(PreTrainedModel):
         std = self.config.init_std
         xavier_std = self.config.init_xavier_std
 
-        if isinstance(module, DetrMHAttentionMap):
+        if isinstance(module, ConditionalDETRMHAttentionMap):
             nn.init.zeros_(module.k_linear.bias)
             nn.init.zeros_(module.q_linear.bias)
             nn.init.xavier_uniform_(module.k_linear.weight, gain=xavier_std)
             nn.init.xavier_uniform_(module.q_linear.weight, gain=xavier_std)
-        elif isinstance(module, DetrLearnedPositionEmbedding):
+        elif isinstance(module, ConditionalDETRLearnedPositionEmbedding):
             nn.init.uniform_(module.row_embeddings.weight)
             nn.init.uniform_(module.column_embeddings.weight)
         if isinstance(module, (nn.Linear, nn.Conv2d, nn.BatchNorm2d)):
@@ -1034,11 +1062,11 @@ class DetrPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
 
     def _set_gradient_checkpointing(self, module, value=False):
-        if isinstance(module, DetrDecoder):
+        if isinstance(module, ConditionalDETRDecoder):
             module.gradient_checkpointing = value
 
 
-DETR_START_DOCSTRING = r"""
+CONDITIONAL_DETR_START_DOCSTRING = r"""
     This model inherits from [`PreTrainedModel`]. Check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving, resizing the input embeddings, pruning heads
     etc.)
@@ -1048,18 +1076,18 @@ DETR_START_DOCSTRING = r"""
     and behavior.
 
     Parameters:
-        config ([`DetrConfig`]):
+        config ([`ConditionalDETRConfig`]):
             Model configuration class with all the parameters of the model. Initializing with a config file does not
             load the weights associated with the model, only the configuration. Check out the
             [`~PreTrainedModel.from_pretrained`] method to load the model weights.
 """
 
-DETR_INPUTS_DOCSTRING = r"""
+CONDITIONAL_DETR_INPUTS_DOCSTRING = r"""
     Args:
         pixel_values (`torch.FloatTensor` of shape `(batch_size, num_channels, height, width)`):
             Pixel values. Padding will be ignored by default should you provide it.
 
-            Pixel values can be obtained using [`DetrFeatureExtractor`]. See [`DetrFeatureExtractor.__call__`] for
+            Pixel values can be obtained using [`ConditionalDETRFeatureExtractor`]. See [`ConditionalDETRFeatureExtractor.__call__`] for
             details.
 
         pixel_mask (`torch.LongTensor` of shape `(batch_size, height, width)`, *optional*):
@@ -1093,30 +1121,31 @@ DETR_INPUTS_DOCSTRING = r"""
 """
 
 
-class DetrEncoder(DetrPreTrainedModel):
+# Copied from transformers.models.detr.modeling_detr.DetrEncoder with DETR->CONDITIONAL_DETR,Detr->ConditionalDETR
+class ConditionalDETREncoder(ConditionalDETRPreTrainedModel):
     """
     Transformer encoder consisting of *config.encoder_layers* self attention layers. Each layer is a
-    [`DetrEncoderLayer`].
+    [`ConditionalDETREncoderLayer`].
 
     The encoder updates the flattened feature map through multiple self-attention layers.
 
-    Small tweak for DETR:
+    Small tweak for CONDITIONAL_DETR:
 
     - position_embeddings are added to the forward pass.
 
     Args:
-        config: DetrConfig
+        config: ConditionalDETRConfig
     """
 
-    def __init__(self, config: DetrConfig):
+    def __init__(self, config: ConditionalDETRConfig):
         super().__init__(config)
 
         self.dropout = config.dropout
         self.layerdrop = config.encoder_layerdrop
 
-        self.layers = nn.ModuleList([DetrEncoderLayer(config) for _ in range(config.encoder_layers)])
+        self.layers = nn.ModuleList([ConditionalDETREncoderLayer(config) for _ in range(config.encoder_layers)])
 
-        # in the original DETR, no layernorm is used at the end of the encoder, as "normalize_before" is set to False by default
+        # in the original CONDITIONAL_DETR, no layernorm is used at the end of the encoder, as "normalize_before" is set to False by default
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1202,38 +1231,32 @@ class DetrEncoder(DetrPreTrainedModel):
         )
 
 
-class DetrDecoder(DetrPreTrainedModel):
+# Copied from transformers.models.detr.modeling_detr.DetrDecoder with DETR->CONDITIONAL_DETR,Detr->ConditionalDETR
+class ConditionalDETRDecoder(ConditionalDETRPreTrainedModel):
     """
-    Transformer decoder consisting of *config.decoder_layers* layers. Each layer is a [`DetrDecoderLayer`].
+    Transformer decoder consisting of *config.decoder_layers* layers. Each layer is a [`ConditionalDETRDecoderLayer`].
 
     The decoder updates the query embeddings through multiple self-attention and cross-attention layers.
 
-    Some small tweaks for DETR:
+    Some small tweaks for CONDITIONAL_DETR:
 
     - position_embeddings and query_position_embeddings are added to the forward pass.
     - if self.config.auxiliary_loss is set to True, also returns a stack of activations from all decoding layers.
 
     Args:
-        config: DetrConfig
+        config: ConditionalDETRConfig
     """
 
-    def __init__(self, config: DetrConfig):
+    def __init__(self, config: ConditionalDETRConfig):
         super().__init__(config)
         self.dropout = config.dropout
         self.layerdrop = config.decoder_layerdrop
 
-        self.layers = nn.ModuleList([DetrDecoderLayer(config) for _ in range(config.decoder_layers)])
-        # in DETR, the decoder uses layernorm after the last decoder layer output
+        self.layers = nn.ModuleList([ConditionalDETRDecoderLayer(config) for _ in range(config.decoder_layers)])
+        # in CONDITIONAL_DETR, the decoder uses layernorm after the last decoder layer output
         self.layernorm = nn.LayerNorm(config.d_model)
-        d_model = config.d_model
+
         self.gradient_checkpointing = False
-
-        # query_scale is the FFN applied on f to generate transformation T
-        self.query_scale = MLP(d_model, d_model, d_model, 2)
-        self.ref_point_head = MLP(d_model, d_model, 2, 2)
-        for layer_id in range(config.decoder_layers - 1):
-            self.layers[layer_id + 1].ca_qpos_proj = None
-
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -1315,12 +1338,6 @@ class DetrDecoder(DetrPreTrainedModel):
         all_self_attns = () if output_attentions else None
         all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
 
-        reference_points_before_sigmoid = self.ref_point_head(query_position_embeddings)    # [num_queries, batch_size, 2]
-        reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
-        obj_center = reference_points[..., :2].transpose(0, 1)  
-        # get sine embedding for the query vector
-        query_sine_embed_before_transformation = gen_sineembed_for_position(obj_center) 
-
         for idx, decoder_layer in enumerate(self.layers):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
             if output_hidden_states:
@@ -1328,12 +1345,7 @@ class DetrDecoder(DetrPreTrainedModel):
             dropout_probability = random.uniform(0, 1)
             if self.training and (dropout_probability < self.layerdrop):
                 continue
-            if idx == 0:
-                pos_transformation = 1
-            else:
-                pos_transformation = self.query_scale(hidden_states)  
-            # apply transformation
-            query_sine_embed = query_sine_embed_before_transformation * pos_transformation
+
             if self.gradient_checkpointing and self.training:
 
                 def create_custom_forward(module):
@@ -1356,11 +1368,9 @@ class DetrDecoder(DetrPreTrainedModel):
                     attention_mask=combined_attention_mask,
                     position_embeddings=position_embeddings,
                     query_position_embeddings=query_position_embeddings,
-                    query_sine_embed=query_sine_embed,
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
                     output_attentions=output_attentions,
-                    is_first=(idx==0)
                 )
 
             hidden_states = layer_outputs[0]
@@ -1389,42 +1399,42 @@ class DetrDecoder(DetrPreTrainedModel):
         if not return_dict:
             return tuple(
                 v
-                for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, intermediate, reference_points]
+                for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, intermediate]
                 if v is not None
             )
-        return DetrDecoderOutput(
+        return ConditionalDETRDecoderOutput(
             last_hidden_state=hidden_states,
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
             cross_attentions=all_cross_attentions,
             intermediate_hidden_states=intermediate,
-            reference_points=reference_points
         )
 
 
 @add_start_docstrings(
     """
-    The bare DETR Model (consisting of a backbone and encoder-decoder Transformer) outputting raw hidden-states without
+    The bare CONDITIONAL_DETR Model (consisting of a backbone and encoder-decoder Transformer) outputting raw hidden-states without
     any specific head on top.
     """,
-    DETR_START_DOCSTRING,
+    CONDITIONAL_DETR_START_DOCSTRING,
 )
-class DetrModel(DetrPreTrainedModel):
-    def __init__(self, config: DetrConfig):
+# Copied from transformers.models.detr.modeling_detr.DetrModel with DETR->CONDITIONAL_DETR,Detr->ConditionalDETR,facebook/detr-resnet-50->Atten4Vis/ConditionalDETR
+class ConditionalDETRModel(ConditionalDETRPreTrainedModel):
+    def __init__(self, config: ConditionalDETRConfig):
         super().__init__(config)
 
         # Create backbone + positional encoding
-        backbone = DetrTimmConvEncoder(config.backbone, config.dilation)
+        backbone = ConditionalDETRTimmConvEncoder(config.backbone, config.dilation)
         position_embeddings = build_position_encoding(config)
-        self.backbone = DetrConvModel(backbone, position_embeddings)
+        self.backbone = ConditionalDETRConvModel(backbone, position_embeddings)
 
         # Create projection layer
         self.input_projection = nn.Conv2d(backbone.intermediate_channel_sizes[-1], config.d_model, kernel_size=1)
 
         self.query_position_embeddings = nn.Embedding(config.num_queries, config.d_model)
 
-        self.encoder = DetrEncoder(config)
-        self.decoder = DetrDecoder(config)
+        self.encoder = ConditionalDETREncoder(config)
+        self.decoder = ConditionalDETRDecoder(config)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1443,8 +1453,8 @@ class DetrModel(DetrPreTrainedModel):
         for name, param in self.backbone.conv_encoder.model.named_parameters():
             param.requires_grad_(True)
 
-    @add_start_docstrings_to_model_forward(DETR_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=DetrModelOutput, config_class=_CONFIG_FOR_DOC)
+    @add_start_docstrings_to_model_forward(CONDITIONAL_DETR_INPUTS_DOCSTRING)
+    @replace_return_docstrings(output_type=ConditionalDETRModelOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         pixel_values,
@@ -1463,15 +1473,15 @@ class DetrModel(DetrPreTrainedModel):
         Examples:
 
         ```python
-        >>> from transformers import DetrFeatureExtractor, DetrModel
+        >>> from transformers import ConditionalDETRFeatureExtractor, ConditionalDETRModel
         >>> from PIL import Image
         >>> import requests
 
         >>> url = "http://images.cocodataset.org/val2017/000000039769.jpg"
         >>> image = Image.open(requests.get(url, stream=True).raw)
 
-        >>> feature_extractor = DetrFeatureExtractor.from_pretrained("facebook/detr-resnet-50")
-        >>> model = DetrModel.from_pretrained("facebook/detr-resnet-50")
+        >>> feature_extractor = ConditionalDETRFeatureExtractor.from_pretrained("Atten4Vis/ConditionalDETR")
+        >>> model = ConditionalDETRModel.from_pretrained("Atten4Vis/ConditionalDETR")
         >>> inputs = feature_extractor(images=image, return_tensors="pt")
         >>> outputs = model(**inputs)
         >>> last_hidden_states = outputs.last_hidden_state
@@ -1549,7 +1559,7 @@ class DetrModel(DetrPreTrainedModel):
         if not return_dict:
             return decoder_outputs + encoder_outputs
 
-        return DetrModelOutput(
+        return ConditionalDETRModelOutput(
             last_hidden_state=decoder_outputs.last_hidden_state,
             decoder_hidden_states=decoder_outputs.hidden_states,
             decoder_attentions=decoder_outputs.attentions,
@@ -1558,36 +1568,36 @@ class DetrModel(DetrPreTrainedModel):
             encoder_hidden_states=encoder_outputs.hidden_states,
             encoder_attentions=encoder_outputs.attentions,
             intermediate_hidden_states=decoder_outputs.intermediate_hidden_states,
-            reference_points=decoder_outputs.reference_points
         )
 
 
 @add_start_docstrings(
     """
-    DETR Model (consisting of a backbone and encoder-decoder Transformer) with object detection heads on top, for tasks
+    CONDITIONAL_DETR Model (consisting of a backbone and encoder-decoder Transformer) with object detection heads on top, for tasks
     such as COCO detection.
     """,
-    DETR_START_DOCSTRING,
+    CONDITIONAL_DETR_START_DOCSTRING,
 )
-class DetrForObjectDetection(DetrPreTrainedModel):
-    def __init__(self, config: DetrConfig):
+# Copied from transformers.models.detr.modeling_detr.DetrForObjectDetection with DETR->CONDITIONAL_DETR,Detr->ConditionalDETR,detr->conditional_detr,facebook/detr-resnet-50->Atten4Vis/ConditionalDETR
+class ConditionalDETRForObjectDetection(ConditionalDETRPreTrainedModel):
+    def __init__(self, config: ConditionalDETRConfig):
         super().__init__(config)
 
-        # DETR encoder-decoder model
-        self.model = DetrModel(config)
+        # CONDITIONAL_DETR encoder-decoder model
+        self.model = ConditionalDETRModel(config)
 
         # Object detection heads
         self.class_labels_classifier = nn.Linear(
-            config.d_model, config.num_labels
+            config.d_model, config.num_labels + 1
         )  # We add one for the "no object" class
-        self.bbox_predictor = DetrMLPPredictionHead(
+        self.bbox_predictor = ConditionalDETRMLPPredictionHead(
             input_dim=config.d_model, hidden_dim=config.d_model, output_dim=4, num_layers=3
         )
 
         # Initialize weights and apply final processing
         self.post_init()
 
-    # taken from https://github.com/facebookresearch/detr/blob/master/models/detr.py
+    # taken from https://github.com/facebookresearch/conditional_detr/blob/master/models/conditional_detr.py
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):
         # this is a workaround to make torchscript happy, as torchscript
@@ -1595,8 +1605,8 @@ class DetrForObjectDetection(DetrPreTrainedModel):
         # as a dict having both a Tensor and a list.
         return [{"logits": a, "pred_boxes": b} for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
 
-    @add_start_docstrings_to_model_forward(DETR_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=DetrObjectDetectionOutput, config_class=_CONFIG_FOR_DOC)
+    @add_start_docstrings_to_model_forward(CONDITIONAL_DETR_INPUTS_DOCSTRING)
+    @replace_return_docstrings(output_type=ConditionalDETRObjectDetectionOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         pixel_values,
@@ -1622,15 +1632,15 @@ class DetrForObjectDetection(DetrPreTrainedModel):
         Examples:
 
         ```python
-        >>> from transformers import DetrFeatureExtractor, DetrForObjectDetection
+        >>> from transformers import ConditionalDETRFeatureExtractor, ConditionalDETRForObjectDetection
         >>> from PIL import Image
         >>> import requests
 
         >>> url = "http://images.cocodataset.org/val2017/000000039769.jpg"
         >>> image = Image.open(requests.get(url, stream=True).raw)
 
-        >>> feature_extractor = DetrFeatureExtractor.from_pretrained("facebook/detr-resnet-50")
-        >>> model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50")
+        >>> feature_extractor = ConditionalDETRFeatureExtractor.from_pretrained("Atten4Vis/ConditionalDETR")
+        >>> model = ConditionalDETRForObjectDetection.from_pretrained("Atten4Vis/ConditionalDETR")
 
         >>> inputs = feature_extractor(images=image, return_tensors="pt")
         >>> outputs = model(**inputs)
@@ -1640,7 +1650,7 @@ class DetrForObjectDetection(DetrPreTrainedModel):
         ```"""
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        # First, sent images through DETR base model to obtain encoder + decoder outputs
+        # First, sent images through CONDITIONAL_DETR base model to obtain encoder + decoder outputs
         outputs = self.model(
             pixel_values,
             pixel_mask=pixel_mask,
@@ -1657,28 +1667,20 @@ class DetrForObjectDetection(DetrPreTrainedModel):
 
         # class logits + predicted bounding boxes
         logits = self.class_labels_classifier(sequence_output)
-
-        reference = outputs.reference_points if return_dict else outputs[-1]
-        reference_before_sigmoid = inverse_sigmoid(reference)
-        outputs_coords = []
-        hs = outputs.intermediate_hidden_states if return_dict else outputs[4]
-        tmp = self.bbox_predictor(hs[-1])
-        tmp[..., :2] += reference_before_sigmoid
-        pred_boxes = tmp.sigmoid()
-        # pred_boxes = self.bbox_predictor(sequence_output).sigmoid()
+        pred_boxes = self.bbox_predictor(sequence_output).sigmoid()
 
         loss, loss_dict, auxiliary_outputs = None, None, None
         if labels is not None:
             # First: create the matcher
-            matcher = DetrHungarianMatcher(
+            matcher = ConditionalDETRHungarianMatcher(
                 class_cost=self.config.class_cost, bbox_cost=self.config.bbox_cost, giou_cost=self.config.giou_cost
             )
             # Second: create the criterion
             losses = ["labels", "boxes", "cardinality"]
-            criterion = DetrLoss(
+            criterion = ConditionalDETRLoss(
                 matcher=matcher,
                 num_classes=self.config.num_labels,
-                focal_alpha=self.config.focal_alpha,
+                eos_coef=self.config.eos_coefficient,
                 losses=losses,
             )
             criterion.to(self.device)
@@ -1689,21 +1691,13 @@ class DetrForObjectDetection(DetrPreTrainedModel):
             if self.config.auxiliary_loss:
                 intermediate = outputs.intermediate_hidden_states if return_dict else outputs[4]
                 outputs_class = self.class_labels_classifier(intermediate)
-                # outputs_coord = self.bbox_predictor(intermediate).sigmoid()
-
-                for lvl in range(hs.shape[0]):
-                    tmp = self.bbox_predictor(hs[lvl])
-                    tmp[..., :2] += reference_before_sigmoid
-                    outputs_coord = tmp.sigmoid()
-                    outputs_coords.append(outputs_coord)
-                outputs_coord = torch.stack(outputs_coords)
-
+                outputs_coord = self.bbox_predictor(intermediate).sigmoid()
                 auxiliary_outputs = self._set_aux_loss(outputs_class, outputs_coord)
                 outputs_loss["auxiliary_outputs"] = auxiliary_outputs
 
             loss_dict = criterion(outputs_loss, labels)
             # Fourth: compute total loss, as a weighted sum of the various losses
-            weight_dict = {"loss_ce": self.config.cls_loss_coefficient, "loss_bbox": self.config.bbox_loss_coefficient}
+            weight_dict = {"loss_ce": 1, "loss_bbox": self.config.bbox_loss_coefficient}
             weight_dict["loss_giou"] = self.config.giou_loss_coefficient
             if self.config.auxiliary_loss:
                 aux_weight_dict = {}
@@ -1719,7 +1713,7 @@ class DetrForObjectDetection(DetrPreTrainedModel):
                 output = (logits, pred_boxes) + outputs
             return ((loss, loss_dict) + output) if loss is not None else output
 
-        return DetrObjectDetectionOutput(
+        return ConditionalDETRObjectDetectionOutput(
             loss=loss,
             loss_dict=loss_dict,
             logits=logits,
@@ -1737,36 +1731,37 @@ class DetrForObjectDetection(DetrPreTrainedModel):
 
 @add_start_docstrings(
     """
-    DETR Model (consisting of a backbone and encoder-decoder Transformer) with a segmentation head on top, for tasks
+    CONDITIONAL_DETR Model (consisting of a backbone and encoder-decoder Transformer) with a segmentation head on top, for tasks
     such as COCO panoptic.
 
     """,
-    DETR_START_DOCSTRING,
+    CONDITIONAL_DETR_START_DOCSTRING,
 )
-class DetrForSegmentation(DetrPreTrainedModel):
-    def __init__(self, config: DetrConfig):
+# Copied from transformers.models.detr.modeling_detr.DetrForSegmentation with DETR->CONDITIONAL_DETR,Detr->ConditionalDETR,detr->conditional_detr,facebook/detr-resnet-50->Atten4Vis/ConditionalDETR
+class ConditionalDETRForSegmentation(ConditionalDETRPreTrainedModel):
+    def __init__(self, config: ConditionalDETRConfig):
         super().__init__(config)
 
         # object detection model
-        self.detr = DetrForObjectDetection(config)
+        self.conditional_detr = ConditionalDETRForObjectDetection(config)
 
         # segmentation head
         hidden_size, number_of_heads = config.d_model, config.encoder_attention_heads
-        intermediate_channel_sizes = self.detr.model.backbone.conv_encoder.intermediate_channel_sizes
+        intermediate_channel_sizes = self.conditional_detr.model.backbone.conv_encoder.intermediate_channel_sizes
 
-        self.mask_head = DetrMaskHeadSmallConv(
+        self.mask_head = ConditionalDETRMaskHeadSmallConv(
             hidden_size + number_of_heads, intermediate_channel_sizes[::-1][-3:], hidden_size
         )
 
-        self.bbox_attention = DetrMHAttentionMap(
+        self.bbox_attention = ConditionalDETRMHAttentionMap(
             hidden_size, hidden_size, number_of_heads, dropout=0.0, std=config.init_xavier_std
         )
 
         # Initialize weights and apply final processing
         self.post_init()
 
-    @add_start_docstrings_to_model_forward(DETR_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=DetrSegmentationOutput, config_class=_CONFIG_FOR_DOC)
+    @add_start_docstrings_to_model_forward(CONDITIONAL_DETR_INPUTS_DOCSTRING)
+    @replace_return_docstrings(output_type=ConditionalDETRSegmentationOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         pixel_values,
@@ -1794,15 +1789,15 @@ class DetrForSegmentation(DetrPreTrainedModel):
         Examples:
 
         ```python
-        >>> from transformers import DetrFeatureExtractor, DetrForSegmentation
+        >>> from transformers import ConditionalDETRFeatureExtractor, ConditionalDETRForSegmentation
         >>> from PIL import Image
         >>> import requests
 
         >>> url = "http://images.cocodataset.org/val2017/000000039769.jpg"
         >>> image = Image.open(requests.get(url, stream=True).raw)
 
-        >>> feature_extractor = DetrFeatureExtractor.from_pretrained("facebook/detr-resnet-50-panoptic")
-        >>> model = DetrForSegmentation.from_pretrained("facebook/detr-resnet-50-panoptic")
+        >>> feature_extractor = ConditionalDETRFeatureExtractor.from_pretrained("Atten4Vis/ConditionalDETR-panoptic")
+        >>> model = ConditionalDETRForSegmentation.from_pretrained("Atten4Vis/ConditionalDETR-panoptic")
 
         >>> inputs = feature_extractor(images=image, return_tensors="pt")
         >>> outputs = model(**inputs)
@@ -1821,12 +1816,12 @@ class DetrForSegmentation(DetrPreTrainedModel):
             pixel_mask = torch.ones((batch_size, height, width), device=device)
 
         # First, get list of feature maps and position embeddings
-        features, position_embeddings_list = self.detr.model.backbone(pixel_values, pixel_mask=pixel_mask)
+        features, position_embeddings_list = self.conditional_detr.model.backbone(pixel_values, pixel_mask=pixel_mask)
 
         # Second, apply 1x1 convolution to reduce the channel dimension to d_model (256 by default)
         feature_map, mask = features[-1]
         batch_size, num_channels, height, width = feature_map.shape
-        projected_feature_map = self.detr.model.input_projection(feature_map)
+        projected_feature_map = self.conditional_detr.model.input_projection(feature_map)
 
         # Third, flatten the feature map + position embeddings of shape NxCxHxW to NxCxHW, and permute it to NxHWxC
         # In other words, turn their shape into (batch_size, sequence_length, hidden_size)
@@ -1839,7 +1834,7 @@ class DetrForSegmentation(DetrPreTrainedModel):
         # flattened_features is a Tensor of shape (batch_size, heigth*width, hidden_size)
         # flattened_mask is a Tensor of shape (batch_size, heigth*width)
         if encoder_outputs is None:
-            encoder_outputs = self.detr.model.encoder(
+            encoder_outputs = self.conditional_detr.model.encoder(
                 inputs_embeds=flattened_features,
                 attention_mask=flattened_mask,
                 position_embeddings=position_embeddings,
@@ -1856,13 +1851,13 @@ class DetrForSegmentation(DetrPreTrainedModel):
             )
 
         # Fifth, sent query embeddings + position embeddings through the decoder (which is conditioned on the encoder output)
-        query_position_embeddings = self.detr.model.query_position_embeddings.weight.unsqueeze(0).repeat(
+        query_position_embeddings = self.conditional_detr.model.query_position_embeddings.weight.unsqueeze(0).repeat(
             batch_size, 1, 1
         )
         queries = torch.zeros_like(query_position_embeddings)
 
         # decoder outputs consists of (dec_features, dec_hidden, dec_attn)
-        decoder_outputs = self.detr.model.decoder(
+        decoder_outputs = self.conditional_detr.model.decoder(
             inputs_embeds=queries,
             attention_mask=None,
             position_embeddings=position_embeddings,
@@ -1877,8 +1872,8 @@ class DetrForSegmentation(DetrPreTrainedModel):
         sequence_output = decoder_outputs[0]
 
         # Sixth, compute logits, pred_boxes and pred_masks
-        logits = self.detr.class_labels_classifier(sequence_output)
-        pred_boxes = self.detr.bbox_predictor(sequence_output).sigmoid()
+        logits = self.conditional_detr.class_labels_classifier(sequence_output)
+        pred_boxes = self.conditional_detr.bbox_predictor(sequence_output).sigmoid()
 
         memory = encoder_outputs[0].permute(0, 2, 1).view(batch_size, self.config.d_model, height, width)
         mask = flattened_mask.view(batch_size, height, width)
@@ -1890,17 +1885,17 @@ class DetrForSegmentation(DetrPreTrainedModel):
 
         seg_masks = self.mask_head(projected_feature_map, bbox_mask, [features[2][0], features[1][0], features[0][0]])
 
-        pred_masks = seg_masks.view(batch_size, self.detr.config.num_queries, seg_masks.shape[-2], seg_masks.shape[-1])
+        pred_masks = seg_masks.view(batch_size, self.conditional_detr.config.num_queries, seg_masks.shape[-2], seg_masks.shape[-1])
 
         loss, loss_dict, auxiliary_outputs = None, None, None
         if labels is not None:
             # First: create the matcher
-            matcher = DetrHungarianMatcher(
+            matcher = ConditionalDETRHungarianMatcher(
                 class_cost=self.config.class_cost, bbox_cost=self.config.bbox_cost, giou_cost=self.config.giou_cost
             )
             # Second: create the criterion
             losses = ["labels", "boxes", "cardinality", "masks"]
-            criterion = DetrLoss(
+            criterion = ConditionalDETRLoss(
                 matcher=matcher,
                 num_classes=self.config.num_labels,
                 eos_coef=self.config.eos_coefficient,
@@ -1939,7 +1934,7 @@ class DetrForSegmentation(DetrPreTrainedModel):
                 output = (logits, pred_boxes, pred_masks) + decoder_outputs + encoder_outputs
             return ((loss, loss_dict) + output) if loss is not None else output
 
-        return DetrSegmentationOutput(
+        return ConditionalDETRSegmentationOutput(
             loss=loss,
             loss_dict=loss_dict,
             logits=logits,
@@ -1960,8 +1955,9 @@ def _expand(tensor, length: int):
     return tensor.unsqueeze(1).repeat(1, int(length), 1, 1, 1).flatten(0, 1)
 
 
-# taken from https://github.com/facebookresearch/detr/blob/master/models/segmentation.py
-class DetrMaskHeadSmallConv(nn.Module):
+# taken from https://github.com/facebookresearch/conditional_detr/blob/master/models/segmentation.py
+# Copied from transformers.models.detr.modeling_detr.DetrMaskHeadSmallConv with Detr->ConditionalDETR
+class ConditionalDETRMaskHeadSmallConv(nn.Module):
     """
     Simple convolutional head, using group norm. Upsampling is done using a FPN approach
     """
@@ -2040,7 +2036,8 @@ class DetrMaskHeadSmallConv(nn.Module):
         return x
 
 
-class DetrMHAttentionMap(nn.Module):
+# Copied from transformers.models.detr.modeling_detr.DetrMHAttentionMap with Detr->ConditionalDETR
+class ConditionalDETRMHAttentionMap(nn.Module):
     """This is a 2D attention module, which only returns the attention softmax (no multiplication by value)"""
 
     def __init__(self, query_dim, hidden_dim, num_heads, dropout=0.0, bias=True, std=None):
@@ -2117,43 +2114,47 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
     return loss.mean(1).sum() / num_boxes
 
 
-# taken from https://github.com/facebookresearch/detr/blob/master/models/detr.py
-class DetrLoss(nn.Module):
+# taken from https://github.com/facebookresearch/conditional_detr/blob/master/models/conditional_detr.py
+# Copied from transformers.models.detr.modeling_detr.DetrLoss with Detr->ConditionalDETR,detr->conditional_detr
+class ConditionalDETRLoss(nn.Module):
     """
-    This class computes the losses for DetrForObjectDetection/DetrForSegmentation. The process happens in two steps: 1)
+    This class computes the losses for ConditionalDETRForObjectDetection/ConditionalDETRForSegmentation. The process happens in two steps: 1)
     we compute hungarian assignment between ground truth boxes and the outputs of the model 2) we supervise each pair
     of matched ground-truth / prediction (supervise class and box).
 
-    A note on the `num_classes` argument (copied from original repo in detr.py): "the naming of the `num_classes`
+    A note on the `num_classes` argument (copied from original repo in conditional_detr.py): "the naming of the `num_classes`
     parameter of the criterion is somewhat misleading. It indeed corresponds to `max_obj_id` + 1, where `max_obj_id` is
     the maximum id for a class in your dataset. For example, COCO has a `max_obj_id` of 90, so we pass `num_classes` to
     be 91. As another example, for a dataset that has a single class with `id` 1, you should pass `num_classes` to be 2
     (`max_obj_id` + 1). For more details on this, check the following discussion
-    https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223"
+    https://github.com/facebookresearch/conditional_detr/issues/108#issuecomment-650269223"
 
 
     Args:
-        matcher (`DetrHungarianMatcher`):
+        matcher (`ConditionalDETRHungarianMatcher`):
             Module able to compute a matching between targets and proposals.
         num_classes (`int`):
             Number of object categories, omitting the special no-object category.
-        focal_alpha (`float`):
-            Alpha parmeter in focal loss.
+        eos_coef (`float`):
+            Relative classification weight applied to the no-object category.
         losses (`List[str]`):
             List of all the losses to be applied. See `get_loss` for a list of all available losses.
     """
 
-    def __init__(self, matcher, num_classes, focal_alpha, losses):
+    def __init__(self, matcher, num_classes, eos_coef, losses):
         super().__init__()
         self.matcher = matcher
         self.num_classes = num_classes
-        self.focal_alpha = focal_alpha
+        self.eos_coef = eos_coef
         self.losses = losses
+        empty_weight = torch.ones(self.num_classes + 1)
+        empty_weight[-1] = self.eos_coef
+        self.register_buffer("empty_weight", empty_weight)
 
     # removed logging parameter, which was part of the original implementation
     def loss_labels(self, outputs, targets, indices, num_boxes):
         """
-        Classification loss (Binary focal loss) targets dicts must contain the key "class_labels" containing a tensor of dim
+        Classification loss (NLL) targets dicts must contain the key "class_labels" containing a tensor of dim
         [nb_target_boxes]
         """
         if "logits" not in outputs:
@@ -2167,12 +2168,7 @@ class DetrLoss(nn.Module):
         )
         target_classes[idx] = target_classes_o
 
-        target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2]+1],
-                                            dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
-        target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
-
-        target_classes_onehot = target_classes_onehot[:,:,:-1]
-        loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
+        loss_ce = nn.functional.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
         losses = {"loss_ce": loss_ce}
 
         return losses
@@ -2318,13 +2314,14 @@ class DetrLoss(nn.Module):
         return losses
 
 
-# taken from https://github.com/facebookresearch/detr/blob/master/models/detr.py
-class DetrMLPPredictionHead(nn.Module):
+# taken from https://github.com/facebookresearch/conditional_detr/blob/master/models/conditional_detr.py
+# Copied from transformers.models.detr.modeling_detr.DetrMLPPredictionHead with Detr->ConditionalDETR,detr->conditional_detr
+class ConditionalDETRMLPPredictionHead(nn.Module):
     """
     Very simple multi-layer perceptron (MLP, also called FFN), used to predict the normalized center coordinates,
     height and width of a bounding box w.r.t. an image.
 
-    Copied from https://github.com/facebookresearch/detr/blob/master/models/detr.py
+    Copied from https://github.com/facebookresearch/conditional_detr/blob/master/models/conditional_detr.py
 
     """
 
@@ -2340,8 +2337,9 @@ class DetrMLPPredictionHead(nn.Module):
         return x
 
 
-# taken from https://github.com/facebookresearch/detr/blob/master/models/matcher.py
-class DetrHungarianMatcher(nn.Module):
+# taken from https://github.com/facebookresearch/conditional_detr/blob/master/models/matcher.py
+# Copied from transformers.models.detr.modeling_detr.DetrHungarianMatcher with Detr->ConditionalDETR
+class ConditionalDETRHungarianMatcher(nn.Module):
     """
     This class computes an assignment between the targets and the predictions of the network.
 
@@ -2392,20 +2390,17 @@ class DetrHungarianMatcher(nn.Module):
         batch_size, num_queries = outputs["logits"].shape[:2]
 
         # We flatten to compute the cost matrices in a batch
-        out_prob = outputs["logits"].flatten(0, 1).sigmoid()  # [batch_size * num_queries, num_classes]
+        out_prob = outputs["logits"].flatten(0, 1).softmax(-1)  # [batch_size * num_queries, num_classes]
         out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
 
         # Also concat the target labels and boxes
         tgt_ids = torch.cat([v["class_labels"] for v in targets])
         tgt_bbox = torch.cat([v["boxes"] for v in targets])
 
-        # Compute the classification cost.
-        alpha = 0.25
-        gamma = 2.0
-        neg_cost_class = (1 - alpha) * (out_prob ** gamma) * (-(1 - out_prob + 1e-8).log())
-        pos_cost_class = alpha * ((1 - out_prob) ** gamma) * (-(out_prob + 1e-8).log())
-        class_cost = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
-
+        # Compute the classification cost. Contrary to the loss, we don't use the NLL,
+        # but approximate it in 1 - proba[target class].
+        # The 1 is a constant that doesn't change the matching, it can be ommitted.
+        class_cost = -out_prob[:, tgt_ids]
 
         # Compute the L1 cost between boxes
         bbox_cost = torch.cdist(out_bbox, tgt_bbox, p=1)
@@ -2422,7 +2417,7 @@ class DetrHungarianMatcher(nn.Module):
         return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
 
 
-# below: bounding box utilities taken from https://github.com/facebookresearch/detr/blob/master/util/box_ops.py
+# below: bounding box utilities taken from https://github.com/facebookresearch/conditional_detr/blob/master/util/box_ops.py
 
 
 def _upcast(t: Tensor) -> Tensor:
@@ -2488,7 +2483,7 @@ def generalized_box_iou(boxes1, boxes2):
     return iou - (area - union) / area
 
 
-# below: taken from https://github.com/facebookresearch/detr/blob/master/util/misc.py#L306
+# below: taken from https://github.com/facebookresearch/conditional_detr/blob/master/util/misc.py#L306
 
 
 def _max_by_axis(the_list):
