@@ -144,13 +144,13 @@ class ConditionalDETRModelTester:
         result = model(pixel_values=pixel_values, pixel_mask=pixel_mask)
         result = model(pixel_values)
 
-        self.parent.assertEqual(result.logits.shape, (self.batch_size, self.num_queries, self.num_labels + 1))
+        self.parent.assertEqual(result.logits.shape, (self.batch_size, self.num_queries, self.num_labels))
         self.parent.assertEqual(result.pred_boxes.shape, (self.batch_size, self.num_queries, 4))
 
         result = model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=labels)
 
         self.parent.assertEqual(result.loss.shape, ())
-        self.parent.assertEqual(result.logits.shape, (self.batch_size, self.num_queries, self.num_labels + 1))
+        self.parent.assertEqual(result.logits.shape, (self.batch_size, self.num_queries, self.num_labels))
         self.parent.assertEqual(result.pred_boxes.shape, (self.batch_size, self.num_queries, 4))
 
 
@@ -273,17 +273,17 @@ class ConditionalDETRModelTest(ModelTesterMixin, GenerationTesterMixin, unittest
             out_len = len(outputs)
 
             if self.is_encoder_decoder:
-                correct_outlen = 5
+                correct_outlen = 6
 
                 # loss is at first position
                 if "labels" in inputs_dict:
                     correct_outlen += 1  # loss is added to beginning
                 # Object Detection model returns pred_logits and pred_boxes
                 if model_class.__name__ == "ConditionalDETRForObjectDetection":
-                    correct_outlen += 2
+                    correct_outlen += 1
                 # Panoptic Segmentation model returns pred_logits, pred_boxes, pred_masks
                 if model_class.__name__ == "ConditionalDETRForSegmentation":
-                    correct_outlen += 3
+                    correct_outlen += 2
                 if "past_key_values" in outputs:
                     correct_outlen += 1  # past_key_values have been returned
 
@@ -410,7 +410,7 @@ class ConditionalDETRModelTest(ModelTesterMixin, GenerationTesterMixin, unittest
                 expected_shape = (
                     self.model_tester.batch_size,
                     self.model_tester.num_queries,
-                    self.model_tester.num_labels + 1,
+                    self.model_tester.num_labels,
                 )
                 self.assertEqual(outputs.logits.shape, expected_shape)
 
@@ -467,7 +467,7 @@ class ConditionalDETRModelIntegrationTests(unittest.TestCase):
         with torch.no_grad():
             outputs = model(**encoding)
 
-        expected_shape = torch.Size((1, 100, 256))
+        expected_shape = torch.Size((1, 300, 256))
         assert outputs.last_hidden_state.shape == expected_shape
         expected_slice = torch.tensor(
             [[0.0616, -0.5146, -0.4032], [-0.7629, -0.4934, -1.7153], [-0.4768, -0.6403, -0.7826]]
@@ -486,7 +486,7 @@ class ConditionalDETRModelIntegrationTests(unittest.TestCase):
         with torch.no_grad():
             outputs = model(pixel_values, pixel_mask)
 
-        expected_shape_logits = torch.Size((1, model.config.num_queries, model.config.num_labels + 1))
+        expected_shape_logits = torch.Size((1, model.config.num_queries, model.config.num_labels))
         self.assertEqual(outputs.logits.shape, expected_shape_logits)
         expected_slice_logits = torch.tensor(
             [[-19.1194, -0.0893, -11.0154], [-17.3640, -1.8035, -14.0219], [-20.0461, -0.5837, -11.1060]]
@@ -512,7 +512,7 @@ class ConditionalDETRModelIntegrationTests(unittest.TestCase):
         with torch.no_grad():
             outputs = model(pixel_values, pixel_mask)
 
-        expected_shape_logits = torch.Size((1, model.config.num_queries, model.config.num_labels + 1))
+        expected_shape_logits = torch.Size((1, model.config.num_queries, model.config.num_labels))
         self.assertEqual(outputs.logits.shape, expected_shape_logits)
         expected_slice_logits = torch.tensor(
             [[-18.1565, -1.7568, -13.5029], [-16.8888, -1.4138, -14.1028], [-17.5709, -2.5080, -11.8654]]

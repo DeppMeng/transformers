@@ -24,8 +24,6 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from transformers.models.conditional_detr_source.modeling_conditional_detr import DetrAttention
-
 from ...activations import ACT2FN
 from ...modeling_outputs import BaseModelOutput, BaseModelOutputWithCrossAttentions, Seq2SeqModelOutput
 from ...modeling_utils import PreTrainedModel
@@ -501,8 +499,7 @@ def inverse_sigmoid(x, eps=1e-5):
     x2 = (1 - x).clamp(min=eps)
     return torch.log(x1/x2)
 
-# Copied from transformers.models.detr.modeling_detr.DetrAttention with DETR->CONDITIONAL_DETR,Detr->ConditionalDETR
-class ConditionalDETRAttention(nn.Module):
+class DetrAttention(nn.Module):
     """
     Multi-headed attention from 'Attention Is All You Need' paper.
 
@@ -628,7 +625,7 @@ class ConditionalDETRAttention(nn.Module):
 
         return attn_output, attn_weights_reshaped
 
-class ConditionalDETRDecoupledAttention(nn.Module):
+class ConditionalDETRAttention(nn.Module):
     """
     Cross-Attention used in Conditional DETR 'Conditional DETR for Fast Training Convergence' paper.
 
@@ -667,8 +664,10 @@ class ConditionalDETRDecoupledAttention(nn.Module):
         # self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.out_proj = nn.Linear(out_dim, out_dim, bias=bias)
 
-    def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
+    def _qk_shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+    def _v_shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
+        return tensor.view(bsz, seq_len, self.num_heads, self.v_head_dim).transpose(1, 2).contiguous()
 
     # def with_pos_embed(self, tensor: torch.Tensor, position_embeddings: Optional[Tensor]):
     #     return tensor if position_embeddings is None else tensor + position_embeddings
@@ -691,12 +690,12 @@ class ConditionalDETRDecoupledAttention(nn.Module):
         # get query proj
         query_states = hidden_states * self.scaling
         # get key, value proj
-        key_states = self._shape(key_states, -1, bsz)
-        value_states = self._shape(value_states, -1, bsz)
+        key_states = self._qk_shape(key_states, -1, bsz)
+        value_states = self._v_shape(value_states, -1, bsz)
 
         proj_shape = (bsz * self.num_heads, -1, self.head_dim)
         v_proj_shape = (bsz * self.num_heads, -1, self.v_head_dim)
-        query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
+        query_states = self._qk_shape(query_states, tgt_len, bsz).view(*proj_shape)
         key_states = key_states.view(*proj_shape)
         value_states = value_states.view(*v_proj_shape)
 
@@ -747,8 +746,6 @@ class ConditionalDETRDecoupledAttention(nn.Module):
         return attn_output, attn_weights_reshaped
 
 
-
-# Copied from transformers.models.detr.modeling_detr.DetrEncoderLayer with Detr->ConditionalDETR
 class ConditionalDETREncoderLayer(nn.Module):
     def __init__(self, config: ConditionalDETRConfig):
         super().__init__()
@@ -906,23 +903,11 @@ class ConditionalDETRDecoderLayer(nn.Module):
         k_pos = self.sa_kpos_proj(query_position_embeddings)
         v = self.sa_v_proj(hidden_states)
 
-        num_queries, bs, n_model = q_content.shape
-        hw, _, _ = k_content.shape
+        bs, num_queries, n_model = q_content.shape
+        _, hw, _ = k_content.shape
 
         q = q_content + q_pos
         k = k_content + k_pos
-        # Self Attention
-        hidden_states, self_attn_weights = self.self_attn(
-            hidden_states=hidden_states,
-            position_embeddings=query_position_embeddings,
-            attention_mask=attention_mask,
-            output_attentions=output_attentions,
-        )
-
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states = residual + hidden_states
-        hidden_states = self.self_attn_layer_norm(hidden_states)
-
         hidden_states, self_attn_weights = self.self_attn(
             hidden_states=q,
             attention_mask=attention_mask,
@@ -930,6 +915,7 @@ class ConditionalDETRDecoderLayer(nn.Module):
             value_states=v,
             output_attentions=output_attentions,
         )
+        # ============ End of Self-Attention =============
 
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
@@ -942,8 +928,8 @@ class ConditionalDETRDecoderLayer(nn.Module):
         k_content = self.ca_kcontent_proj(encoder_hidden_states)
         v = self.ca_v_proj(encoder_hidden_states)
 
-        num_queries, bs, n_model = q_content.shape
-        hw, _, _ = k_content.shape
+        bs, num_queries, n_model = q_content.shape
+        _, hw, _ = k_content.shape
 
         k_pos = self.ca_kpos_proj(position_embeddings)
 
@@ -957,13 +943,13 @@ class ConditionalDETRDecoderLayer(nn.Module):
             q = q_content
             k = k_content
 
-        q = q.view(num_queries, bs, self.nhead, n_model//self.nhead)
+        q = q.view(bs, num_queries, self.nhead, n_model//self.nhead)
         query_sine_embed = self.ca_qpos_sine_proj(query_sine_embed)
-        query_sine_embed = query_sine_embed.view(num_queries, bs, self.nhead, n_model//self.nhead)
-        q = torch.cat([q, query_sine_embed], dim=3).view(num_queries, bs, n_model * 2)
-        k = k.view(hw, bs, self.nhead, n_model//self.nhead)
-        k_pos = k_pos.view(hw, bs, self.nhead, n_model//self.nhead)
-        k = torch.cat([k, k_pos], dim=3).view(hw, bs, n_model * 2)
+        query_sine_embed = query_sine_embed.view(bs, num_queries, self.nhead, n_model//self.nhead)
+        q = torch.cat([q, query_sine_embed], dim=3).view(bs, num_queries, n_model * 2)
+        k = k.view(bs, hw, self.nhead, n_model//self.nhead)
+        k_pos = k_pos.view(bs, hw, self.nhead, n_model//self.nhead)
+        k = torch.cat([k, k_pos], dim=3).view(bs, hw, n_model * 2)
 
         # Cross-Attention Block
         cross_attn_weights = None
@@ -981,6 +967,8 @@ class ConditionalDETRDecoderLayer(nn.Module):
             hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
             hidden_states = residual + hidden_states
             hidden_states = self.encoder_attn_layer_norm(hidden_states)
+
+        # ============ End of Cross-Attention =============
 
         # Fully Connected
         residual = hidden_states
@@ -1231,7 +1219,6 @@ class ConditionalDETREncoder(ConditionalDETRPreTrainedModel):
         )
 
 
-# Copied from transformers.models.detr.modeling_detr.DetrDecoder with DETR->CONDITIONAL_DETR,Detr->ConditionalDETR
 class ConditionalDETRDecoder(ConditionalDETRPreTrainedModel):
     """
     Transformer decoder consisting of *config.decoder_layers* layers. Each layer is a [`ConditionalDETRDecoderLayer`].
@@ -1255,8 +1242,15 @@ class ConditionalDETRDecoder(ConditionalDETRPreTrainedModel):
         self.layers = nn.ModuleList([ConditionalDETRDecoderLayer(config) for _ in range(config.decoder_layers)])
         # in CONDITIONAL_DETR, the decoder uses layernorm after the last decoder layer output
         self.layernorm = nn.LayerNorm(config.d_model)
-
+        d_model = config.d_model
         self.gradient_checkpointing = False
+
+        # query_scale is the FFN applied on f to generate transformation T
+        self.query_scale = MLP(d_model, d_model, d_model, 2)
+        self.ref_point_head = MLP(d_model, d_model, 2, 2)
+        for layer_id in range(config.decoder_layers - 1):
+            self.layers[layer_id + 1].ca_qpos_proj = None
+
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -1338,6 +1332,12 @@ class ConditionalDETRDecoder(ConditionalDETRPreTrainedModel):
         all_self_attns = () if output_attentions else None
         all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
 
+        reference_points_before_sigmoid = self.ref_point_head(query_position_embeddings)    # [num_queries, batch_size, 2]
+        reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
+        obj_center = reference_points[..., :2].transpose(0, 1)  
+        # get sine embedding for the query vector
+        query_sine_embed_before_transformation = gen_sineembed_for_position(obj_center) 
+
         for idx, decoder_layer in enumerate(self.layers):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
             if output_hidden_states:
@@ -1345,7 +1345,12 @@ class ConditionalDETRDecoder(ConditionalDETRPreTrainedModel):
             dropout_probability = random.uniform(0, 1)
             if self.training and (dropout_probability < self.layerdrop):
                 continue
-
+            if idx == 0:
+                pos_transformation = 1
+            else:
+                pos_transformation = self.query_scale(hidden_states)  
+            # apply transformation
+            query_sine_embed = query_sine_embed_before_transformation * pos_transformation
             if self.gradient_checkpointing and self.training:
 
                 def create_custom_forward(module):
@@ -1358,8 +1363,12 @@ class ConditionalDETRDecoder(ConditionalDETRPreTrainedModel):
                     create_custom_forward(decoder_layer),
                     hidden_states,
                     combined_attention_mask,
+                    position_embeddings,
+                    query_position_embeddings,
+                    query_sine_embed,
                     encoder_hidden_states,
                     encoder_attention_mask,
+                    None,
                     None,
                 )
             else:
@@ -1368,9 +1377,11 @@ class ConditionalDETRDecoder(ConditionalDETRPreTrainedModel):
                     attention_mask=combined_attention_mask,
                     position_embeddings=position_embeddings,
                     query_position_embeddings=query_position_embeddings,
+                    query_sine_embed=query_sine_embed,
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
                     output_attentions=output_attentions,
+                    is_first=(idx==0)
                 )
 
             hidden_states = layer_outputs[0]
@@ -1399,7 +1410,7 @@ class ConditionalDETRDecoder(ConditionalDETRPreTrainedModel):
         if not return_dict:
             return tuple(
                 v
-                for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, intermediate]
+                for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, intermediate, reference_points]
                 if v is not None
             )
         return ConditionalDETRDecoderOutput(
@@ -1408,6 +1419,7 @@ class ConditionalDETRDecoder(ConditionalDETRPreTrainedModel):
             attentions=all_self_attns,
             cross_attentions=all_cross_attentions,
             intermediate_hidden_states=intermediate,
+            reference_points=reference_points
         )
 
 
@@ -1418,7 +1430,6 @@ class ConditionalDETRDecoder(ConditionalDETRPreTrainedModel):
     """,
     CONDITIONAL_DETR_START_DOCSTRING,
 )
-# Copied from transformers.models.detr.modeling_detr.DetrModel with DETR->CONDITIONAL_DETR,Detr->ConditionalDETR,facebook/detr-resnet-50->Atten4Vis/ConditionalDETR
 class ConditionalDETRModel(ConditionalDETRPreTrainedModel):
     def __init__(self, config: ConditionalDETRConfig):
         super().__init__(config)
@@ -1568,6 +1579,7 @@ class ConditionalDETRModel(ConditionalDETRPreTrainedModel):
             encoder_hidden_states=encoder_outputs.hidden_states,
             encoder_attentions=encoder_outputs.attentions,
             intermediate_hidden_states=decoder_outputs.intermediate_hidden_states,
+            reference_points=decoder_outputs.reference_points
         )
 
 
@@ -1588,7 +1600,7 @@ class ConditionalDETRForObjectDetection(ConditionalDETRPreTrainedModel):
 
         # Object detection heads
         self.class_labels_classifier = nn.Linear(
-            config.d_model, config.num_labels + 1
+            config.d_model, config.num_labels
         )  # We add one for the "no object" class
         self.bbox_predictor = ConditionalDETRMLPPredictionHead(
             input_dim=config.d_model, hidden_dim=config.d_model, output_dim=4, num_layers=3
@@ -1597,7 +1609,7 @@ class ConditionalDETRForObjectDetection(ConditionalDETRPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-    # taken from https://github.com/facebookresearch/conditional_detr/blob/master/models/conditional_detr.py
+    # taken from https://github.com/Atten4Vis/conditionalDETR/blob/master/models/conditional_detr.py
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):
         # this is a workaround to make torchscript happy, as torchscript
@@ -1667,7 +1679,15 @@ class ConditionalDETRForObjectDetection(ConditionalDETRPreTrainedModel):
 
         # class logits + predicted bounding boxes
         logits = self.class_labels_classifier(sequence_output)
-        pred_boxes = self.bbox_predictor(sequence_output).sigmoid()
+
+        reference = outputs.reference_points if return_dict else outputs[-1]
+        reference_before_sigmoid = inverse_sigmoid(reference).transpose(0, 1)
+        outputs_coords = []
+        hs = sequence_output
+        tmp = self.bbox_predictor(hs)
+        tmp[..., :2] += reference_before_sigmoid
+        pred_boxes = tmp.sigmoid()
+        # pred_boxes = self.bbox_predictor(sequence_output).sigmoid()
 
         loss, loss_dict, auxiliary_outputs = None, None, None
         if labels is not None:
@@ -1680,7 +1700,7 @@ class ConditionalDETRForObjectDetection(ConditionalDETRPreTrainedModel):
             criterion = ConditionalDETRLoss(
                 matcher=matcher,
                 num_classes=self.config.num_labels,
-                eos_coef=self.config.eos_coefficient,
+                focal_alpha=self.config.focal_alpha,
                 losses=losses,
             )
             criterion.to(self.device)
@@ -1691,13 +1711,20 @@ class ConditionalDETRForObjectDetection(ConditionalDETRPreTrainedModel):
             if self.config.auxiliary_loss:
                 intermediate = outputs.intermediate_hidden_states if return_dict else outputs[4]
                 outputs_class = self.class_labels_classifier(intermediate)
-                outputs_coord = self.bbox_predictor(intermediate).sigmoid()
+
+                for lvl in range(hs.shape[0]):
+                    tmp = self.bbox_predictor(hs[lvl])
+                    tmp[..., :2] += reference_before_sigmoid
+                    outputs_coord = tmp.sigmoid()
+                    outputs_coords.append(outputs_coord)
+                outputs_coord = torch.stack(outputs_coords)
+
                 auxiliary_outputs = self._set_aux_loss(outputs_class, outputs_coord)
                 outputs_loss["auxiliary_outputs"] = auxiliary_outputs
 
             loss_dict = criterion(outputs_loss, labels)
             # Fourth: compute total loss, as a weighted sum of the various losses
-            weight_dict = {"loss_ce": 1, "loss_bbox": self.config.bbox_loss_coefficient}
+            weight_dict = {"loss_ce": self.config.cls_loss_coefficient, "loss_bbox": self.config.bbox_loss_coefficient}
             weight_dict["loss_giou"] = self.config.giou_loss_coefficient
             if self.config.auxiliary_loss:
                 aux_weight_dict = {}
@@ -1898,7 +1925,7 @@ class ConditionalDETRForSegmentation(ConditionalDETRPreTrainedModel):
             criterion = ConditionalDETRLoss(
                 matcher=matcher,
                 num_classes=self.config.num_labels,
-                eos_coef=self.config.eos_coefficient,
+                focal_alpha=self.config.focal_alpha,
                 losses=losses,
             )
             criterion.to(self.device)
@@ -1955,7 +1982,7 @@ def _expand(tensor, length: int):
     return tensor.unsqueeze(1).repeat(1, int(length), 1, 1, 1).flatten(0, 1)
 
 
-# taken from https://github.com/facebookresearch/conditional_detr/blob/master/models/segmentation.py
+# taken from https://github.com/facebookresearch/detr/blob/master/models/segmentation.py
 # Copied from transformers.models.detr.modeling_detr.DetrMaskHeadSmallConv with Detr->ConditionalDETR
 class ConditionalDETRMaskHeadSmallConv(nn.Module):
     """
@@ -2114,20 +2141,13 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
     return loss.mean(1).sum() / num_boxes
 
 
-# taken from https://github.com/facebookresearch/conditional_detr/blob/master/models/conditional_detr.py
-# Copied from transformers.models.detr.modeling_detr.DetrLoss with Detr->ConditionalDETR,detr->conditional_detr
+# taken from https://github.com/Atten4Vis/conditionalDETR/blob/master/models/conditional_detr.py
 class ConditionalDETRLoss(nn.Module):
     """
     This class computes the losses for ConditionalDETRForObjectDetection/ConditionalDETRForSegmentation. The process happens in two steps: 1)
     we compute hungarian assignment between ground truth boxes and the outputs of the model 2) we supervise each pair
     of matched ground-truth / prediction (supervise class and box).
 
-    A note on the `num_classes` argument (copied from original repo in conditional_detr.py): "the naming of the `num_classes`
-    parameter of the criterion is somewhat misleading. It indeed corresponds to `max_obj_id` + 1, where `max_obj_id` is
-    the maximum id for a class in your dataset. For example, COCO has a `max_obj_id` of 90, so we pass `num_classes` to
-    be 91. As another example, for a dataset that has a single class with `id` 1, you should pass `num_classes` to be 2
-    (`max_obj_id` + 1). For more details on this, check the following discussion
-    https://github.com/facebookresearch/conditional_detr/issues/108#issuecomment-650269223"
 
 
     Args:
@@ -2135,26 +2155,23 @@ class ConditionalDETRLoss(nn.Module):
             Module able to compute a matching between targets and proposals.
         num_classes (`int`):
             Number of object categories, omitting the special no-object category.
-        eos_coef (`float`):
-            Relative classification weight applied to the no-object category.
+        focal_alpha (`float`):
+            Alpha parmeter in focal loss.
         losses (`List[str]`):
             List of all the losses to be applied. See `get_loss` for a list of all available losses.
     """
 
-    def __init__(self, matcher, num_classes, eos_coef, losses):
+    def __init__(self, matcher, num_classes, focal_alpha, losses):
         super().__init__()
         self.matcher = matcher
         self.num_classes = num_classes
-        self.eos_coef = eos_coef
+        self.focal_alpha = focal_alpha
         self.losses = losses
-        empty_weight = torch.ones(self.num_classes + 1)
-        empty_weight[-1] = self.eos_coef
-        self.register_buffer("empty_weight", empty_weight)
 
     # removed logging parameter, which was part of the original implementation
     def loss_labels(self, outputs, targets, indices, num_boxes):
         """
-        Classification loss (NLL) targets dicts must contain the key "class_labels" containing a tensor of dim
+        Classification loss (Binary focal loss) targets dicts must contain the key "class_labels" containing a tensor of dim
         [nb_target_boxes]
         """
         if "logits" not in outputs:
@@ -2168,7 +2185,12 @@ class ConditionalDETRLoss(nn.Module):
         )
         target_classes[idx] = target_classes_o
 
-        loss_ce = nn.functional.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
+        target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2]+1],
+                                            dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
+        target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
+
+        target_classes_onehot = target_classes_onehot[:,:,:-1]
+        loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
         losses = {"loss_ce": loss_ce}
 
         return losses
@@ -2314,14 +2336,14 @@ class ConditionalDETRLoss(nn.Module):
         return losses
 
 
-# taken from https://github.com/facebookresearch/conditional_detr/blob/master/models/conditional_detr.py
+# taken from https://github.com/facebookresearch/detr/blob/master/models/detr.py
 # Copied from transformers.models.detr.modeling_detr.DetrMLPPredictionHead with Detr->ConditionalDETR,detr->conditional_detr
 class ConditionalDETRMLPPredictionHead(nn.Module):
     """
     Very simple multi-layer perceptron (MLP, also called FFN), used to predict the normalized center coordinates,
     height and width of a bounding box w.r.t. an image.
 
-    Copied from https://github.com/facebookresearch/conditional_detr/blob/master/models/conditional_detr.py
+    Copied from https://github.com/facebookresearch/detr/blob/master/models/detr.py
 
     """
 
@@ -2337,8 +2359,7 @@ class ConditionalDETRMLPPredictionHead(nn.Module):
         return x
 
 
-# taken from https://github.com/facebookresearch/conditional_detr/blob/master/models/matcher.py
-# Copied from transformers.models.detr.modeling_detr.DetrHungarianMatcher with Detr->ConditionalDETR
+# taken from https://github.com/Atten4Vis/conditionalDETR/blob/master/models/matcher.py
 class ConditionalDETRHungarianMatcher(nn.Module):
     """
     This class computes an assignment between the targets and the predictions of the network.
@@ -2390,17 +2411,19 @@ class ConditionalDETRHungarianMatcher(nn.Module):
         batch_size, num_queries = outputs["logits"].shape[:2]
 
         # We flatten to compute the cost matrices in a batch
-        out_prob = outputs["logits"].flatten(0, 1).softmax(-1)  # [batch_size * num_queries, num_classes]
+        out_prob = outputs["logits"].flatten(0, 1).sigmoid()  # [batch_size * num_queries, num_classes]
         out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
 
         # Also concat the target labels and boxes
         tgt_ids = torch.cat([v["class_labels"] for v in targets])
         tgt_bbox = torch.cat([v["boxes"] for v in targets])
 
-        # Compute the classification cost. Contrary to the loss, we don't use the NLL,
-        # but approximate it in 1 - proba[target class].
-        # The 1 is a constant that doesn't change the matching, it can be ommitted.
-        class_cost = -out_prob[:, tgt_ids]
+        # Compute the classification cost.
+        alpha = 0.25
+        gamma = 2.0
+        neg_cost_class = (1 - alpha) * (out_prob ** gamma) * (-(1 - out_prob + 1e-8).log())
+        pos_cost_class = alpha * ((1 - out_prob) ** gamma) * (-(out_prob + 1e-8).log())
+        class_cost = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
 
         # Compute the L1 cost between boxes
         bbox_cost = torch.cdist(out_bbox, tgt_bbox, p=1)
@@ -2417,7 +2440,7 @@ class ConditionalDETRHungarianMatcher(nn.Module):
         return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
 
 
-# below: bounding box utilities taken from https://github.com/facebookresearch/conditional_detr/blob/master/util/box_ops.py
+# below: bounding box utilities taken from https://github.com/facebookresearch/detr/blob/master/util/box_ops.py
 
 
 def _upcast(t: Tensor) -> Tensor:
@@ -2483,7 +2506,7 @@ def generalized_box_iou(boxes1, boxes2):
     return iou - (area - union) / area
 
 
-# below: taken from https://github.com/facebookresearch/conditional_detr/blob/master/util/misc.py#L306
+# below: taken from https://github.com/facebookresearch/detr/blob/master/util/misc.py#L306
 
 
 def _max_by_axis(the_list):

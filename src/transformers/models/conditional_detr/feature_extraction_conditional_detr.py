@@ -37,7 +37,7 @@ logger = logging.get_logger(__name__)
 ImageInput = Union[Image.Image, np.ndarray, "torch.Tensor", List[Image.Image], List[np.ndarray], List["torch.Tensor"]]
 
 
-# 2 functions below inspired by https://github.com/facebookresearch/conditional_detr/blob/master/util/box_ops.py
+# 2 functions below inspired by https://github.com/facebookresearch/detr/blob/master/util/box_ops.py
 def center_to_corners_format(x):
     """
     Converts a PyTorch tensor of bounding boxes of center format (center_x, center_y, width, height) to corners format
@@ -186,7 +186,7 @@ class ConditionalDETRFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtrac
         else:
             raise ValueError(f"Format {self.format} not supported")
 
-    # inspired by https://github.com/facebookresearch/conditional_detr/blob/master/datasets/coco.py#L33
+    # inspired by https://github.com/facebookresearch/detr/blob/master/datasets/coco.py#L33
     def convert_coco_poly_to_mask(self, segmentations, height, width):
 
         try:
@@ -210,7 +210,7 @@ class ConditionalDETRFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtrac
 
         return masks
 
-    # inspired by https://github.com/facebookresearch/conditional_detr/blob/master/datasets/coco.py#L50
+    # inspired by https://github.com/facebookresearch/detr/blob/master/datasets/coco.py#L50
     def prepare_coco_detection(self, image, target, return_segmentation_masks=False):
         """
         Convert the target in COCO format into the format expected by CONDITIONAL_DETR.
@@ -672,7 +672,7 @@ class ConditionalDETRFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtrac
         return encoded_inputs
 
     # POSTPROCESSING METHODS
-    # inspired by https://github.com/facebookresearch/conditional_detr/blob/master/models/conditional_detr.py#L258
+    # inspired by https://github.com/Atten4Vis/conditionalDETR/blob/master/models/conditional_detr.py#L258
     def post_process(self, outputs, target_sizes):
         """
         Converts the output of [`ConditionalDETRForObjectDetection`] into the format expected by the COCO api. Only supports
@@ -697,11 +697,14 @@ class ConditionalDETRFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtrac
         if target_sizes.shape[1] != 2:
             raise ValueError("Each element of target_sizes must contain the size (h, w) of each image of the batch")
 
-        prob = nn.functional.softmax(out_logits, -1)
-        scores, labels = prob[..., :-1].max(-1)
-
-        # convert to [x0, y0, x1, y1] format
+        prob = out_logits.sigmoid()
+        topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), 100, dim=1)
+        scores = topk_values
+        topk_boxes = topk_indexes // out_logits.shape[2]
+        labels = topk_indexes % out_logits.shape[2]
         boxes = center_to_corners_format(out_bbox)
+        boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
+        
         # and from relative [0, 1] to absolute [0, height] coordinates
         img_h, img_w = target_sizes.unbind(1)
         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
@@ -752,7 +755,7 @@ class ConditionalDETRFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtrac
             preds.append(predictions)
         return preds
 
-    # inspired by https://github.com/facebookresearch/conditional_detr/blob/master/models/segmentation.py#L218
+    # inspired by https://github.com/facebookresearch/detr/blob/master/models/segmentation.py#L218
     def post_process_instance(self, results, outputs, orig_target_sizes, max_target_sizes, threshold=0.5):
         """
         Converts the output of [`ConditionalDETRForSegmentation`] into actual instance segmentation predictions. Only supports
@@ -796,7 +799,7 @@ class ConditionalDETRFeatureExtractor(FeatureExtractionMixin, ImageFeatureExtrac
 
         return results
 
-    # inspired by https://github.com/facebookresearch/conditional_detr/blob/master/models/segmentation.py#L241
+    # inspired by https://github.com/facebookresearch/detr/blob/master/models/segmentation.py#L241
     def post_process_panoptic(self, outputs, processed_sizes, target_sizes=None, is_thing_map=None, threshold=0.85):
         """
         Converts the output of [`ConditionalDETRForSegmentation`] into actual panoptic predictions. Only supports PyTorch.

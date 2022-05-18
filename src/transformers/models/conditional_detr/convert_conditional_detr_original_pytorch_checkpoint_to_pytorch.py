@@ -61,13 +61,13 @@ for i in range(6):
     )
     rename_keys.append(
         (
-            f"transformer.decoder.layers.{i}.multihead_attn.out_proj.weight",
+            f"transformer.decoder.layers.{i}.cross_attn.out_proj.weight",
             f"decoder.layers.{i}.encoder_attn.out_proj.weight",
         )
     )
     rename_keys.append(
         (
-            f"transformer.decoder.layers.{i}.multihead_attn.out_proj.bias",
+            f"transformer.decoder.layers.{i}.cross_attn.out_proj.bias",
             f"decoder.layers.{i}.encoder_attn.out_proj.bias",
         )
     )
@@ -88,7 +88,33 @@ for i in range(6):
     rename_keys.append((f"transformer.decoder.layers.{i}.norm3.weight", f"decoder.layers.{i}.final_layer_norm.weight"))
     rename_keys.append((f"transformer.decoder.layers.{i}.norm3.bias", f"decoder.layers.{i}.final_layer_norm.bias"))
 
+    # q, k, v projections in self/cross-attention in decoder for conditional DETR
+    rename_keys.append((f"transformer.decoder.layers.{i}.sa_qcontent_proj.weight", f"decoder.layers.{i}.sa_qcontent_proj.weight"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.sa_kcontent_proj.weight", f"decoder.layers.{i}.sa_kcontent_proj.weight"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.sa_qpos_proj.weight", f"decoder.layers.{i}.sa_qpos_proj.weight"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.sa_kpos_proj.weight", f"decoder.layers.{i}.sa_kpos_proj.weight"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.sa_v_proj.weight", f"decoder.layers.{i}.sa_v_proj.weight"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.ca_qcontent_proj.weight", f"decoder.layers.{i}.ca_qcontent_proj.weight"))
+    # rename_keys.append((f"transformer.decoder.layers.{i}.ca_qpos_proj.weight", f"decoder.layers.{i}.ca_qpos_proj.weight"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.ca_kcontent_proj.weight", f"decoder.layers.{i}.ca_kcontent_proj.weight"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.ca_kpos_proj.weight", f"decoder.layers.{i}.ca_kpos_proj.weight"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.ca_v_proj.weight", f"decoder.layers.{i}.ca_v_proj.weight"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.ca_qpos_sine_proj.weight", f"decoder.layers.{i}.ca_qpos_sine_proj.weight"))
+
+    rename_keys.append((f"transformer.decoder.layers.{i}.sa_qcontent_proj.bias", f"decoder.layers.{i}.sa_qcontent_proj.bias"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.sa_kcontent_proj.bias", f"decoder.layers.{i}.sa_kcontent_proj.bias"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.sa_qpos_proj.bias", f"decoder.layers.{i}.sa_qpos_proj.bias"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.sa_kpos_proj.bias", f"decoder.layers.{i}.sa_kpos_proj.bias"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.sa_v_proj.bias", f"decoder.layers.{i}.sa_v_proj.bias"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.ca_qcontent_proj.bias", f"decoder.layers.{i}.ca_qcontent_proj.bias"))
+    # rename_keys.append((f"transformer.decoder.layers.{i}.ca_qpos_proj.bias", f"decoder.layers.{i}.ca_qpos_proj.bias"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.ca_kcontent_proj.bias", f"decoder.layers.{i}.ca_kcontent_proj.bias"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.ca_kpos_proj.bias", f"decoder.layers.{i}.ca_kpos_proj.bias"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.ca_v_proj.bias", f"decoder.layers.{i}.ca_v_proj.bias"))
+    rename_keys.append((f"transformer.decoder.layers.{i}.ca_qpos_sine_proj.bias", f"decoder.layers.{i}.ca_qpos_sine_proj.bias"))
+
 # convolutional projection + query embeddings + layernorm of decoder + class and bounding box heads
+# for conditional DETR, also convert reference point head and query scale MLP
 rename_keys.extend(
     [
         ("input_proj.weight", "input_projection.weight"),
@@ -104,6 +130,16 @@ rename_keys.extend(
         ("bbox_embed.layers.1.bias", "bbox_predictor.layers.1.bias"),
         ("bbox_embed.layers.2.weight", "bbox_predictor.layers.2.weight"),
         ("bbox_embed.layers.2.bias", "bbox_predictor.layers.2.bias"),
+        ("transformer.decoder.ref_point_head.layers.0.weight", "decoder.ref_point_head.layers.0.weight"),
+        ("transformer.decoder.ref_point_head.layers.0.bias", "decoder.ref_point_head.layers.0.bias"),
+        ("transformer.decoder.ref_point_head.layers.1.weight", "decoder.ref_point_head.layers.1.weight"),
+        ("transformer.decoder.ref_point_head.layers.1.bias", "decoder.ref_point_head.layers.1.bias"),
+        ("transformer.decoder.query_scale.layers.0.weight", "decoder.query_scale.layers.0.weight"),
+        ("transformer.decoder.query_scale.layers.0.bias", "decoder.query_scale.layers.0.bias"),
+        ("transformer.decoder.query_scale.layers.1.weight", "decoder.query_scale.layers.1.weight"),
+        ("transformer.decoder.query_scale.layers.1.bias", "decoder.query_scale.layers.1.bias"),
+        ("transformer.decoder.layers.0.ca_qpos_proj.weight", "decoder.layers.0.ca_qpos_proj.weight"),
+        ("transformer.decoder.layers.0.ca_qpos_proj.bias", "decoder.layers.0.ca_qpos_proj.bias")
     ]
 )
 
@@ -142,31 +178,7 @@ def read_in_q_k_v(state_dict, is_panoptic=False):
         state_dict[f"encoder.layers.{i}.self_attn.k_proj.bias"] = in_proj_bias[256:512]
         state_dict[f"encoder.layers.{i}.self_attn.v_proj.weight"] = in_proj_weight[-256:, :]
         state_dict[f"encoder.layers.{i}.self_attn.v_proj.bias"] = in_proj_bias[-256:]
-    # next: transformer decoder (which is a bit more complex because it also includes cross-attention)
-    for i in range(6):
-        # read in weights + bias of input projection layer of self-attention
-        in_proj_weight = state_dict.pop(f"{prefix}transformer.decoder.layers.{i}.self_attn.in_proj_weight")
-        in_proj_bias = state_dict.pop(f"{prefix}transformer.decoder.layers.{i}.self_attn.in_proj_bias")
-        # next, add query, keys and values (in that order) to the state dict
-        state_dict[f"decoder.layers.{i}.self_attn.q_proj.weight"] = in_proj_weight[:256, :]
-        state_dict[f"decoder.layers.{i}.self_attn.q_proj.bias"] = in_proj_bias[:256]
-        state_dict[f"decoder.layers.{i}.self_attn.k_proj.weight"] = in_proj_weight[256:512, :]
-        state_dict[f"decoder.layers.{i}.self_attn.k_proj.bias"] = in_proj_bias[256:512]
-        state_dict[f"decoder.layers.{i}.self_attn.v_proj.weight"] = in_proj_weight[-256:, :]
-        state_dict[f"decoder.layers.{i}.self_attn.v_proj.bias"] = in_proj_bias[-256:]
-        # read in weights + bias of input projection layer of cross-attention
-        in_proj_weight_cross_attn = state_dict.pop(
-            f"{prefix}transformer.decoder.layers.{i}.multihead_attn.in_proj_weight"
-        )
-        in_proj_bias_cross_attn = state_dict.pop(f"{prefix}transformer.decoder.layers.{i}.multihead_attn.in_proj_bias")
-        # next, add query, keys and values (in that order) of cross-attention to the state dict
-        state_dict[f"decoder.layers.{i}.encoder_attn.q_proj.weight"] = in_proj_weight_cross_attn[:256, :]
-        state_dict[f"decoder.layers.{i}.encoder_attn.q_proj.bias"] = in_proj_bias_cross_attn[:256]
-        state_dict[f"decoder.layers.{i}.encoder_attn.k_proj.weight"] = in_proj_weight_cross_attn[256:512, :]
-        state_dict[f"decoder.layers.{i}.encoder_attn.k_proj.bias"] = in_proj_bias_cross_attn[256:512]
-        state_dict[f"decoder.layers.{i}.encoder_attn.v_proj.weight"] = in_proj_weight_cross_attn[-256:, :]
-        state_dict[f"decoder.layers.{i}.encoder_attn.v_proj.bias"] = in_proj_bias_cross_attn[-256:]
-
+    
 
 # We will verify our results on an image of cute cats
 def prepare_img():
@@ -213,7 +225,7 @@ def convert_conditional_detr_checkpoint(model_name, pytorch_dump_folder_path):
     logger.info(f"Converting model {model_name}...")
 
     # load original model from torch hub
-    conditional_detr = torch.hub.load("facebookresearch/conditional_detr", model_name, pretrained=True).eval()
+    conditional_detr = torch.hub.load("DeppMeng/ConditionalDETR", model_name, pretrained=True).eval()
     state_dict = conditional_detr.state_dict()
     # rename keys
     for src, dest in rename_keys:
